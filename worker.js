@@ -1,4 +1,4 @@
-// Cloudflare Worker Real-Time Room Controller
+// worker.js
 const rooms = new Map();
 
 export default {
@@ -28,7 +28,6 @@ export default {
 
                     const room = rooms.get(roomCode);
 
-                    // Capacity check
                     if (room.size >= 5) {
                         server.send(JSON.stringify({
                             type: 'room_error',
