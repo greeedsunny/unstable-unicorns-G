@@ -91,8 +91,7 @@
         </div>
 
         <div id="error"></div>
-
-        <div id="status">Not connected yet.</div>
+        <div id="status">Connecting to Cloudflare...</div>
 
         <div id="lobby-info" class="player-list" style="display: none;">
             <strong>Connected Players (<span id="count">0</span>/<span id="max">5</span>):</strong>
@@ -100,11 +99,15 @@
         </div>
     </div>
 
-    <script src="/socket.io/socket.io.js"></script>
     <script>
-        const socket = io({
-            transports: ['polling', 'websocket']
-        });
+        // ⚠️ REPLACE THIS WITH YOUR CLOUDFLARE WORKER URL FROM STEP 1
+        const WORKER_URL = "wss://unicorn-server.YOUR-SUBDOMAIN.workers.dev";
+
+        const socket = new WebSocket(WORKER_URL);
+
+        socket.onopen = () => {
+            document.getElementById('status').innerText = "Ready to join!";
+        };
 
         function joinRoom() {
             const roomCode = document.getElementById('roomPassword').value.trim();
@@ -117,33 +120,39 @@
 
             document.getElementById('error').innerText = "";
 
-            // Send room join request to server
-            socket.emit('join_room', { roomCode, playerName });
+            // Send join message to Cloudflare Worker
+            socket.send(JSON.stringify({
+                type: 'join_room',
+                roomCode,
+                playerName
+            }));
         }
 
-        // Listen for room updates
-        socket.on('room_status', (data) => {
-            document.getElementById('join-form').style.display = 'none'; // Hide inputs once joined
-            document.getElementById('status').innerText = `Room: "${data.roomCode}"`;
-            document.getElementById('lobby-info').style.display = 'block';
+        // Listen for incoming messages from Cloudflare Worker
+        socket.onmessage = (event) => {
+            const data = JSON.parse(event.data);
 
-            document.getElementById('count').innerText = data.playerCount;
-            document.getElementById('max').innerText = data.maxPlayers;
+            if (data.type === 'room_status') {
+                document.getElementById('join-form').style.display = 'none';
+                document.getElementById('status').innerText = `Room: "${data.roomCode}"`;
+                document.getElementById('lobby-info').style.display = 'block';
 
-            // Update the connected player list display
-            const ul = document.getElementById('players-ul');
-            ul.innerHTML = "";
-            data.players.forEach(name => {
-                const li = document.createElement('li');
-                li.innerText = name;
-                ul.appendChild(li);
-            });
-        });
+                document.getElementById('count').innerText = data.playerCount;
+                document.getElementById('max').innerText = data.maxPlayers;
 
-        // Listen for errors (e.g., room full)
-        socket.on('room_error', (message) => {
-            document.getElementById('error').innerText = message;
-        });
+                const ul = document.getElementById('players-ul');
+                ul.innerHTML = "";
+                data.players.forEach(name => {
+                    const li = document.createElement('li');
+                    li.innerText = name;
+                    ul.appendChild(li);
+                });
+            }
+
+            if (data.type === 'room_error') {
+                document.getElementById('error').innerText = data.message;
+            }
+        };
     </script>
 </body>
 
