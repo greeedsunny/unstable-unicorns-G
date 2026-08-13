@@ -4,7 +4,6 @@
 <head>
     <meta charset="UTF-8">
     <title>Unstable Unicorns - Live Game</title>
-    <!-- Link external stylesheet -->
     <link rel="stylesheet" href="style.css">
 </head>
 
@@ -13,16 +12,20 @@
     <!-- LOBBY SCREEN -->
     <div id="lobby-screen">
         <h2>🦄 Game Lobby</h2>
+
         <div id="join-form">
             <input type="text" id="playerName" placeholder="Your Name (e.g. Alex)" />
             <input type="text" id="roomPassword" placeholder="Room Password (e.g. 123)" />
             <button id="join-btn" onclick="joinRoom()">Join Game Room</button>
         </div>
+
         <div id="error"></div>
         <div id="status">Enter room code to join</div>
+
         <div id="lobby-info" class="player-list" style="display: none;">
             <strong>Connected Players (<span id="count">0</span>/<span id="max">5</span>):</strong>
             <ul id="players-ul"></ul>
+
             <button id="start-game-btn" style="display: none;" onclick="requestStartGame()">Start Game 🚀</button>
         </div>
     </div>
@@ -33,19 +36,23 @@
             <div id="nursery" class="game-pile">
                 <h3>Nursery</h3>
                 <span style="font-size: 1.8rem;">👶</span>
-                <div class="pile-count" id="nursery-count">10</div>
+                <div class="pile-count" id="nursery-count">0</div>
             </div>
+
             <div id="draw-pile" class="game-pile">
                 <h3>Draw</h3>
                 <span style="font-size: 1.8rem;">🃏</span>
-                <div class="pile-count" id="draw-count">54</div>
+                <div class="pile-count" id="draw-count">0</div>
             </div>
+
             <button id="discard-pile" class="game-pile" onclick="showDiscardPile()">
                 <h3>Discard</h3>
                 <span style="font-size: 1.8rem;">🚮</span>
                 <div class="pile-count" id="discard-count">0</div>
             </button>
         </div>
+
+        <!-- HORIZONTAL STABLES CONTAINER -->
         <div id="player-stables"></div>
     </div>
 
@@ -59,8 +66,9 @@
         </div>
     </div>
 
-    <!-- External Sub-files -->
-    <script src="gameBoard.js"></script>
+    <!-- Note lowercase 'gameboard.js' to match VS Code file name -->
+    <script src="gameboard.js"></script>
+    <script src="playerHand.js"></script>
 
     <script>
         const BASE_WORKER_URL = "wss://unstable-unicorns-g.greeedsunny.workers.dev";
@@ -96,6 +104,7 @@
 
             socket.onmessage = (event) => {
                 const data = JSON.parse(event.data);
+
                 if (data.type === 'room_status') updateLobbyUI(data);
                 if (data.type === 'game_started') switchToGame(data);
                 if (data.type === 'room_error') document.getElementById('error').innerText = data.message;
@@ -108,13 +117,17 @@
 
         function requestStartGame() {
             if (!socket || !currentRoomCode) return;
-            socket.send(JSON.stringify({ type: 'start_game', roomCode: currentRoomCode }));
+            socket.send(JSON.stringify({
+                type: 'start_game',
+                roomCode: currentRoomCode
+            }));
         }
 
         function updateLobbyUI(data) {
             document.getElementById('join-form').style.display = 'none';
             document.getElementById('status').innerText = `Room: "${data.roomCode}"`;
             document.getElementById('lobby-info').style.display = 'block';
+
             document.getElementById('count').innerText = data.playerCount;
             document.getElementById('max').innerText = data.maxPlayers;
 
@@ -128,6 +141,27 @@
 
             document.getElementById('start-game-btn').style.display = data.playerCount >= 2 ? 'block' : 'none';
         }
+
+        socket.onmessage = (event) => {
+                const data = JSON.parse(event.data);
+
+                if (data.type === 'room_status') updateLobbyUI(data);
+
+                if (data.type === 'game_started') {
+                    switchToGame(data);
+                    setupHandUI(); // Initialize hand UI
+                }
+
+                // Turn updates broadcasted from worker.js
+                if (data.type === 'turn_update') {
+                    handleTurnStateUpdate(data);
+                }
+
+                if (data.type === 'hand_update') {
+                    updateHandDisplay(data.hand);
+                }
+            }
+            
     </script>
 </body>
 

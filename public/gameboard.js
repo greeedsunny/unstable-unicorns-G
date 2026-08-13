@@ -1,10 +1,26 @@
-// public/gameBoard.js
+// public/gameboard.js
 
-// Local state for game board items
-let discardPileData = ["Panda Unicorn", "Stabby Unicorn", "Glitched Baby"];
+let discardPileData = [];
 
 /**
- * Transition from the Lobby screen to the Game Board screen
+ * Helper function to create HTML for a card image
+ * Example folder categories: 'Baby Unicorn', 'Basic Unicorn', 'Upgrade Card', etc.
+ */
+function createCardElement(category, filename, title = "") {
+    const cardDiv = document.createElement('div');
+    cardDiv.className = 'card-item';
+
+    // URL encoded path for folder names with spaces
+    const imagePath = `image/${encodeURIComponent(category)}/${encodeURIComponent(filename)}`;
+
+    cardDiv.innerHTML = `
+    <img src="${imagePath}" alt="${title || filename}" onerror="this.src='https://via.placeholder.com/60x84?text=Card';" />
+  `;
+    return cardDiv;
+}
+
+/**
+ * Transition from Lobby to Game Board
  */
 function switchToGame(data) {
     document.getElementById('lobby-screen').style.display = "none";
@@ -13,7 +29,7 @@ function switchToGame(data) {
 }
 
 /**
- * Dynamically builds horizontal stables for each connected player
+ * Dynamically builds horizontal stables for connected players
  */
 function generateStables(playersArray) {
     const stablesContainer = document.getElementById('player-stables');
@@ -29,14 +45,14 @@ function generateStables(playersArray) {
       <div class="stable-contents">
         <div class="stable-section">
           <div class="row-label">Unicorns (Max 7)</div>
-          <div class="card-row">
+          <div class="card-row" id="unicorns-${name}">
             <div class="card-placeholder">1</div>
             <div class="card-placeholder">2</div>
           </div>
         </div>
         <div class="stable-section">
           <div class="row-label">Upgrades / Downgrades</div>
-          <div class="card-row">
+          <div class="card-row" id="upgrades-${name}">
             <div class="card-placeholder">UP</div>
             <div class="card-placeholder">DOWN</div>
           </div>
@@ -48,18 +64,23 @@ function generateStables(playersArray) {
 }
 
 /**
- * Discard Pile Modal Controls
+ * Trash Can / Discard Modal Controls
  */
 function showDiscardPile() {
     document.getElementById('discard-modal').style.display = "flex";
     const list = document.getElementById('modal-card-list');
     list.innerHTML = "";
 
-    discardPileData.forEach((cardName, index) => {
+    if (discardPileData.length === 0) {
+        list.innerHTML = "<p style='color:#888;'>The discard pile is empty!</p>";
+        return;
+    }
+
+    discardPileData.forEach((card, index) => {
         const li = document.createElement('li');
         li.className = 'modal-card';
         li.style.borderTopColor = `hsl(${index * 50}, 70%, 55%)`;
-        li.innerHTML = `<strong>#${index + 1}</strong> <span>${cardName}</span>`;
+        li.innerHTML = `<strong>#${index + 1}</strong> <span>${card.name}</span>`;
         list.appendChild(li);
     });
 }
@@ -69,10 +90,10 @@ function closeModal() {
 }
 
 /**
- * Helper to dynamically update central pile counts
+ * Updates central deck counts dynamically
  */
-function updatePileCounts(nursery, draw, discard) {
-    if (nursery !== undefined) document.getElementById('nursery-count').innerText = nursery;
-    if (draw !== undefined) document.getElementById('draw-count').innerText = draw;
-    if (discard !== undefined) document.getElementById('discard-count').innerText = discard;
+function updatePileCounts(nursery = 0, draw = 0, discard = 0) {
+    document.getElementById('nursery-count').innerText = nursery;
+    document.getElementById('draw-count').innerText = draw;
+    document.getElementById('discard-count').innerText = discard;
 }

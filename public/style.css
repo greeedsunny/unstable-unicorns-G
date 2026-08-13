@@ -328,3 +328,126 @@ input {
     font-size: 0.8rem;
     border-top: 5px solid var(--primary);
 }
+
+/* Card Image Styles inside Stables */
+.card-item {
+    width: 58px;
+    height: 82px;
+    border-radius: 6px;
+    overflow: hidden;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15);
+    transition: transform 0.2s ease, box-shadow 0.2s ease;
+    cursor: pointer;
+    background: #fff;
+}
+
+.card-item:hover {
+    transform: translateY(-4px) scale(1.05);
+    box-shadow: 0 6px 12px rgba(0, 0, 0, 0.2);
+}
+
+.card-item img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+}
+
+/* --- Hand & Turn Control Styles --- */
+.hand-bar {
+    background: rgba(255, 255, 255, 0.95);
+    backdrop-filter: blur(10px);
+    border-radius: 14px;
+    padding: 12px 20px;
+    box-shadow: 0 -4px 20px rgba(0, 0, 0, 0.08);
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    border: 1px solid rgba(255, 255, 255, 0.8);
+}
+
+.turn-status-banner {
+    text-align: center;
+    font-weight: 700;
+    font-size: 0.95rem;
+    color: #64748b;
+    padding: 6px;
+    border-radius: 8px;
+    background: #f1f5f9;
+}
+
+.turn-status-banner.active-turn {
+    background: #dcfce7;
+    color: #15803d;
+    animation: pulse 2s infinite;
+}
+
+@keyframes pulse {
+    0% {
+        box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.4);
+    }
+
+    70% {
+        box-shadow: 0 0 0 8px rgba(34, 197, 94, 0);
+    }
+
+    100% {
+        box-shadow: 0 0 0 0 rgba(34, 197, 94, 0);
+    }
+}
+
+.hand-controls {
+    display: flex;
+    justify-content: center;
+    gap: 12px;
+}
+
+.action-btn {
+    padding: 8px 18px;
+    background: var(--accent-2);
+    color: white;
+    border-radius: 8px;
+    font-size: 0.9rem;
+}
+
+.action-btn:disabled {
+    background: #cbd5e1;
+    cursor: not-allowed;
+}
+
+.action-btn.secondary {
+    background: #64748b;
+}
+
+.cards-in-hand {
+    display: flex;
+    gap: 10px;
+    overflow-x: auto;
+    padding: 8px 4px;
+    min-height: 85px;
+    align-items: center;
+    justify-content: center;
+}
+
+.hand-card {
+    width: 58px;
+    height: 82px;
+    border-radius: 6px;
+    overflow: hidden;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.12);
+    cursor: pointer;
+    transition: transform 0.2s ease;
+    background: #fff;
+    flex-shrink: 0;
+}
+
+.hand-card.playable:hover {
+    transform: translateY(-8px) scale(1.08);
+    box-shadow: 0 8px 16px rgba(0, 0, 0, 0.2);
+}
+
+.hand-card img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
