@@ -1,103 +1,134 @@
-<!-- Modal remains in HTML markup -->
-<div id="discard-modal" class="modal">
-    <div class="modal-content">
-        <button id="close-modal" onclick="closeModal()">×</button>
-        <h2 style="margin-top:0;">Trash Can</h2>
-        <p>All discarded cards, in order.</p>
-        <ul id="modal-card-list"></ul>
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <title>Unstable Unicorns - Live Game</title>
+    <!-- Link external stylesheet -->
+    <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+
+    <!-- LOBBY SCREEN -->
+    <div id="lobby-screen">
+        <h2>🦄 Game Lobby</h2>
+        <div id="join-form">
+            <input type="text" id="playerName" placeholder="Your Name (e.g. Alex)" />
+            <input type="text" id="roomPassword" placeholder="Room Password (e.g. 123)" />
+            <button id="join-btn" onclick="joinRoom()">Join Game Room</button>
+        </div>
+        <div id="error"></div>
+        <div id="status">Enter room code to join</div>
+        <div id="lobby-info" class="player-list" style="display: none;">
+            <strong>Connected Players (<span id="count">0</span>/<span id="max">5</span>):</strong>
+            <ul id="players-ul"></ul>
+            <button id="start-game-btn" style="display: none;" onclick="requestStartGame()">Start Game 🚀</button>
+        </div>
     </div>
-</div>
 
-<!-- 1. Load the Game Board sub-file first -->
-<script src="gameBoard.js"></script>
+    <!-- GAME SCREEN -->
+    <div id="game-screen">
+        <div id="central-board">
+            <div id="nursery" class="game-pile">
+                <h3>Nursery</h3>
+                <span style="font-size: 1.8rem;">👶</span>
+                <div class="pile-count" id="nursery-count">10</div>
+            </div>
+            <div id="draw-pile" class="game-pile">
+                <h3>Draw</h3>
+                <span style="font-size: 1.8rem;">🃏</span>
+                <div class="pile-count" id="draw-count">54</div>
+            </div>
+            <button id="discard-pile" class="game-pile" onclick="showDiscardPile()">
+                <h3>Discard</h3>
+                <span style="font-size: 1.8rem;">🚮</span>
+                <div class="pile-count" id="discard-count">0</div>
+            </button>
+        </div>
+        <div id="player-stables"></div>
+    </div>
 
-<!-- 2. Network & Lobby Management Script -->
-<script>
-    const BASE_WORKER_URL = "wss://unstable-unicorns-g.greeedsunny.workers.dev";
-    let socket = null;
-    let myPlayerName = "";
-    let currentRoomCode = "";
+    <!-- DISCARD MODAL -->
+    <div id="discard-modal" class="modal">
+        <div class="modal-content">
+            <button id="close-modal" onclick="closeModal()">×</button>
+            <h2 style="margin-top:0;">Trash Can</h2>
+            <p>All discarded cards, in order.</p>
+            <ul id="modal-card-list"></ul>
+        </div>
+    </div>
 
-    function joinRoom() {
-        const roomCode = document.getElementById('roomPassword').value.trim();
-        const playerName = document.getElementById('playerName').value.trim();
+    <!-- External Sub-files -->
+    <script src="gameBoard.js"></script>
 
-        if (!roomCode) {
-            alert("Please enter a room password!");
-            return;
+    <script>
+        const BASE_WORKER_URL = "wss://unstable-unicorns-g.greeedsunny.workers.dev";
+        let socket = null;
+        let myPlayerName = "";
+        let currentRoomCode = "";
+
+        function joinRoom() {
+            const roomCode = document.getElementById('roomPassword').value.trim();
+            const playerName = document.getElementById('playerName').value.trim();
+
+            if (!roomCode) {
+                alert("Please enter a room password!");
+                return;
+            }
+
+            myPlayerName = playerName || "You";
+            currentRoomCode = roomCode;
+
+            document.getElementById('error').innerText = "";
+            document.getElementById('status').innerText = "Connecting...";
+
+            socket = new WebSocket(`${BASE_WORKER_URL}?room=${encodeURIComponent(roomCode)}`);
+
+            socket.onopen = () => {
+                document.getElementById('status').innerText = `Joined Room "${roomCode}"`;
+                socket.send(JSON.stringify({
+                    type: 'join_room',
+                    roomCode: currentRoomCode,
+                    playerName: myPlayerName
+                }));
+            };
+
+            socket.onmessage = (event) => {
+                const data = JSON.parse(event.data);
+                if (data.type === 'room_status') updateLobbyUI(data);
+                if (data.type === 'game_started') switchToGame(data);
+                if (data.type === 'room_error') document.getElementById('error').innerText = data.message;
+            };
+
+            socket.onerror = () => {
+                document.getElementById('error').innerText = "WebSocket connection failed.";
+            };
         }
 
-        myPlayerName = playerName || "You";
-        currentRoomCode = roomCode;
-
-        document.getElementById('error').innerText = "";
-        document.getElementById('status').innerText = "Connecting...";
-
-        socket = new WebSocket(`${BASE_WORKER_URL}?room=${encodeURIComponent(roomCode)}`);
-
-        socket.onopen = () => {
-            document.getElementById('status').innerText = `Joined Room "${roomCode}"`;
-            socket.send(JSON.stringify({
-                type: 'join_room',
-                roomCode: currentRoomCode,
-                playerName: myPlayerName
-            }));
-        };
-
-        socket.onmessage = (event) => {
-            const data = JSON.parse(event.data);
-
-            if (data.type === 'room_status') {
-                updateLobbyUI(data);
-            }
-
-            if (data.type === 'game_started') {
-                // Calls the function inside gameBoard.js!
-                switchToGame(data);
-            }
-
-            if (data.type === 'room_error') {
-                document.getElementById('error').innerText = data.message;
-            }
-        };
-
-        socket.onerror = () => {
-            document.getElementById('error').innerText = "WebSocket connection failed.";
-        };
-    }
-
-    function requestStartGame() {
-        if (!socket || !currentRoomCode) return;
-        socket.send(JSON.stringify({
-            type: 'start_game',
-            roomCode: currentRoomCode
-        }));
-    }
-
-    function updateLobbyUI(data) {
-        document.getElementById('join-form').style.display = 'none';
-        document.getElementById('status').innerText = `Room: "${data.roomCode}"`;
-        document.getElementById('lobby-info').style.display = 'block';
-
-        document.getElementById('count').innerText = data.playerCount;
-        document.getElementById('max').innerText = data.maxPlayers;
-
-        const ul = document.getElementById('players-ul');
-        ul.innerHTML = "";
-        data.players.forEach(name => {
-            const li = document.createElement('li');
-            li.innerText = name;
-            ul.appendChild(li);
-        });
-
-        const startBtn = document.getElementById('start-game-btn');
-        if (data.playerCount >= 2) {
-            startBtn.style.display = 'block';
-        } else {
-            startBtn.style.display = 'none';
+        function requestStartGame() {
+            if (!socket || !currentRoomCode) return;
+            socket.send(JSON.stringify({ type: 'start_game', roomCode: currentRoomCode }));
         }
-    }
-</script>
+
+        function updateLobbyUI(data) {
+            document.getElementById('join-form').style.display = 'none';
+            document.getElementById('status').innerText = `Room: "${data.roomCode}"`;
+            document.getElementById('lobby-info').style.display = 'block';
+            document.getElementById('count').innerText = data.playerCount;
+            document.getElementById('max').innerText = data.maxPlayers;
+
+            const ul = document.getElementById('players-ul');
+            ul.innerHTML = "";
+            data.players.forEach(name => {
+                const li = document.createElement('li');
+                li.innerText = name;
+                ul.appendChild(li);
+            });
+
+            document.getElementById('start-game-btn').style.display = data.playerCount >= 2 ? 'block' : 'none';
+        }
+    </script>
 </body>
 
 </html>
