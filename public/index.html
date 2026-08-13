@@ -5,20 +5,13 @@
     <meta charset="UTF-8">
     <title>Unstable Unicorns - Live Game</title>
     <style>
-        /* --- Modern, Colorful Theme Variables --- */
         :root {
             --primary: #ff4757;
-            /* Bright Red/Pink */
             --secondary: #eccc68;
-            /* Fun Yellow */
             --accent-1: #2ed573;
-            /* Neon Green */
             --accent-2: #1e90ff;
-            /* Electric Blue */
             --unicorn: #ff9ff3;
-            /* Pastel Pink for Stables */
             --bg: #ffe0f5;
-            /* Light Pink Background */
             --card-bg: rgba(255, 255, 255, 0.95);
             --text: #2f3542;
             --shadow: 0 4px 10px rgba(0, 0, 0, 0.15);
@@ -35,7 +28,6 @@
             color: var(--text);
         }
 
-        /* Global Styles */
         input,
         button {
             font-size: 1rem;
@@ -50,7 +42,6 @@
             transition: 0.2s ease;
         }
 
-        /* --- Lobby Styles (Existing) --- */
         #lobby-screen {
             background: var(--card-bg);
             padding: 2rem;
@@ -58,7 +49,6 @@
             box-shadow: var(--shadow);
             text-align: center;
             width: 320px;
-            transition: opacity 0.5s ease;
         }
 
         input {
@@ -83,6 +73,19 @@
 
         #join-btn:hover {
             background-color: var(--accent-2);
+        }
+
+        #start-game-btn {
+            width: 100%;
+            padding: 12px;
+            background-color: var(--accent-1);
+            color: white;
+            margin-top: 15px;
+            font-size: 1.1rem;
+        }
+
+        #start-game-btn:hover {
+            background-color: #26af5f;
         }
 
         #status,
@@ -113,10 +116,14 @@
             margin: 5px 0 0 0;
         }
 
-        /* --- Game Screen (Main Board) --- */
-        #game-screen { display: none; width: 95vw; height: 95vh; flex-direction: column; overflow: hidden; }
+        #game-screen {
+            display: none;
+            width: 95vw;
+            height: 95vh;
+            flex-direction: column;
+            overflow: hidden;
+        }
 
-        /* Central Board Areas */
         #central-board {
             display: flex;
             justify-content: center;
@@ -162,7 +169,6 @@
             font-size: 2rem;
         }
 
-        /* Discard Pile Button */
         #discard-pile {
             background: #ced4da;
             border: 2px solid #a4b0be;
@@ -179,7 +185,6 @@
             color: #fff;
         }
 
-        /* --- Player Stables Container --- */
         #player-stables {
             flex: 1;
             display: grid;
@@ -189,7 +194,6 @@
             overflow-y: auto;
         }
 
-        /* The Stable Box */
         .stable {
             background: var(--unicorn);
             border-radius: 10px;
@@ -218,7 +222,6 @@
             margin-top: 5px;
         }
 
-        /* Rows within a Stable */
         .stable-row {
             min-height: 90px;
             background: rgba(255, 255, 255, 0.7);
@@ -236,7 +239,6 @@
             margin-bottom: 0;
         }
 
-        /* Placeholder for future card rendering */
         .card-placeholder {
             width: 50px;
             height: 75px;
@@ -250,7 +252,6 @@
             font-size: 0.7rem;
         }
 
-        /* --- Discard Modal (Pop-up) --- */
         .modal {
             display: none;
             position: fixed;
@@ -320,7 +321,7 @@
 
 <body>
 
-    <!-- --- 1. LOBBY SCREEN (Existing) --- -->
+    <!-- LOBBY SCREEN -->
     <div id="lobby-screen">
         <h2>🦄 Game Lobby</h2>
 
@@ -331,35 +332,31 @@
         </div>
 
         <div id="error"></div>
-        <div id="status">Connecting to Cloudflare...</div>
+        <div id="status">Enter room code to join</div>
 
         <div id="lobby-info" class="player-list" style="display: none;">
             <strong>Connected Players (<span id="count">0</span>/<span id="max">5</span>):</strong>
             <ul id="players-ul"></ul>
+
+            <button id="start-game-btn" style="display: none;" onclick="requestStartGame()">Start Game 🚀</button>
         </div>
     </div>
 
-    <!-- --- 2. GAME SCREEN (Main Board Layout) --- -->
+    <!-- GAME SCREEN -->
     <div id="game-screen">
-
-        <!-- Central Piles Section -->
         <div id="central-board">
-
-            <!-- Nursery -->
             <div id="nursery" class="game-pile">
                 <h3>Nursery</h3>
                 <span class="nursery-icon">👶</span>
                 <div class="pile-count" id="nursery-count">10</div>
             </div>
 
-            <!-- Draw Pile -->
             <div id="draw-pile" class="game-pile">
                 <h3>Draw</h3>
                 <span class="draw-pile-icon">🃏</span>
                 <div class="pile-count" id="draw-count">54</div>
             </div>
 
-            <!-- Discard Pile (Button) -->
             <button id="discard-pile" class="game-pile" onclick="showDiscardPile()">
                 <h3>Discard</h3>
                 <span>🚮</span>
@@ -367,34 +364,24 @@
             </button>
         </div>
 
-        <!-- Container for Player Stables -->
-        <div id="player-stables">
-            <!-- Stables will be generated here dynamically based on players -->
-        </div>
+        <div id="player-stables"></div>
     </div>
 
-    <!-- --- 3. DISCARD PILE MODAL (Pop-up) --- -->
+    <!-- DISCARD MODAL -->
     <div id="discard-modal" class="modal">
         <div class="modal-content">
             <button id="close-modal" onclick="closeModal()">×</button>
             <h2>Trash Can</h2>
             <p>All discarded cards, in order.</p>
-            <ul id="modal-card-list">
-                <!-- Cards will appear here -->
-            </ul>
+            <ul id="modal-card-list"></ul>
         </div>
     </div>
 
     <script>
-        // ⚠️ USE YOUR CLOUDFLARE WORKER URL HERE
-        const WORKER_URL = "wss://unstable-unicorns-g.greeedsunny.workers.dev";
-
-        const socket = new WebSocket(WORKER_URL);
+        const BASE_WORKER_URL = "wss://unstable-unicorns-g.greeedsunny.workers.dev";
+        let socket = null;
         let myPlayerName = "";
-
-        socket.onopen = () => {
-            document.getElementById('status').innerText = "Ready to join!";
-        };
+        let currentRoomCode = "";
 
         function joinRoom() {
             const roomCode = document.getElementById('roomPassword').value.trim();
@@ -404,35 +391,53 @@
                 alert("Please enter a room password!");
                 return;
             }
+
             myPlayerName = playerName || "You";
+            currentRoomCode = roomCode;
 
             document.getElementById('error').innerText = "";
+            document.getElementById('status').innerText = "Connecting...";
 
-            socket.send(JSON.stringify({
-                type: 'join_room',
-                roomCode,
-                playerName: myPlayerName
-            }));
-        }
+            // Connect to Durable Objects with room query string
+            socket = new WebSocket(`${BASE_WORKER_URL}?room=${encodeURIComponent(roomCode)}`);
 
-        // --- Listen for incoming messages ---
-        socket.onmessage = (event) => {
-            const data = JSON.parse(event.data);
+            socket.onopen = () => {
+                document.getElementById('status').innerText = `Joined Room "${roomCode}"`;
+                socket.send(JSON.stringify({
+                    type: 'join_room',
+                    roomCode: currentRoomCode,
+                    playerName: myPlayerName
+                }));
+            };
 
-            if (data.type === 'room_status') {
-                updateLobbyUI(data);
-                // Special: If 2 or more players, simulate starting the game UI!
-                if (data.playerCount >= 2 && document.getElementById('game-screen').style.display === "none") {
+            socket.onmessage = (event) => {
+                const data = JSON.parse(event.data);
+
+                if (data.type === 'room_status') {
+                    updateLobbyUI(data);
+                }
+
+                if (data.type === 'game_started') {
                     switchToGame(data);
                 }
-            }
 
-            if (data.type === 'room_error') {
-                document.getElementById('error').innerText = data.message;
-            }
-        };
+                if (data.type === 'room_error') {
+                    document.getElementById('error').innerText = data.message;
+                }
+            };
 
-        // --- Helper UI functions ---
+            socket.onerror = (err) => {
+                document.getElementById('error').innerText = "WebSocket connection failed.";
+            };
+        }
+
+        function requestStartGame() {
+            if (!socket || !currentRoomCode) return;
+            socket.send(JSON.stringify({
+                type: 'start_game',
+                roomCode: currentRoomCode
+            }));
+        }
 
         function updateLobbyUI(data) {
             document.getElementById('join-form').style.display = 'none';
@@ -449,56 +454,56 @@
                 li.innerText = name;
                 ul.appendChild(li);
             });
+
+            const startBtn = document.getElementById('start-game-btn');
+            if (data.playerCount >= 2) {
+                startBtn.style.display = 'block';
+            } else {
+                startBtn.style.display = 'none';
+            }
         }
 
-        // New Game Switch Function
         function switchToGame(data) {
-            console.log("Switching to game board...");
             document.getElementById('lobby-screen').style.display = "none";
             document.getElementById('game-screen').style.display = "flex";
-
             generateStables(data.players);
         }
 
-        // --- Game Logic Functions (New) ---
-
-        // Dynamically create a stable element for every player in the room
         function generateStables(playersArray) {
             const stablesContainer = document.getElementById('player-stables');
-            stablesContainer.innerHTML = ""; // Clear placeholders
+            stablesContainer.innerHTML = "";
 
             playersArray.forEach(name => {
                 const stableDiv = document.createElement('div');
                 stableDiv.className = 'stable';
                 stableDiv.innerHTML = `
-                <h4>${name}'s Stable</h4>
-                <div class="row-label">Unicorns (Max 7)</div>
-                <div class="stable-row unicorns-row">
-                    <div class="card-placeholder">1</div>
-                    <div class="card-placeholder">2</div>
-                </div>
-                <div class="row-label">Upgrades / Downgrades</div>
-                <div class="stable-row mods-row">
-                    <div class="card-placeholder">UP</div>
-                    <div class="card-placeholder">DOWN</div>
-                </div>
-            `;
+          <h4>${name}'s Stable</h4>
+          <div class="row-label">Unicorns (Max 7)</div>
+          <div class="stable-row unicorns-row">
+            <div class="card-placeholder">1</div>
+            <div class="card-placeholder">2</div>
+          </div>
+          <div class="row-label">Upgrades / Downgrades</div>
+          <div class="stable-row mods-row">
+            <div class="card-placeholder">UP</div>
+            <div class="card-placeholder">DOWN</div>
+          </div>
+        `;
                 stablesContainer.appendChild(stableDiv);
             });
         }
 
-        // --- Discard Pile Modal Logic ---
-        let discardPileData = ["Panda Unicorn", "Stabby Unicorn", "Glitched Baby"]; // Placeholder data
+        let discardPileData = ["Panda Unicorn", "Stabby Unicorn", "Glitched Baby"];
 
         function showDiscardPile() {
             document.getElementById('discard-modal').style.display = "flex";
             const list = document.getElementById('modal-card-list');
-            list.innerHTML = ""; // Clear list
+            list.innerHTML = "";
 
             discardPileData.forEach((cardName, index) => {
                 const li = document.createElement('li');
                 li.className = 'modal-card';
-                li.style.borderTopColor = `hsl(${index * 40}, 70%, 60%)`; // Fun colors
+                li.style.borderTopColor = `hsl(${index * 40}, 70%, 60%)`;
                 li.innerHTML = `<strong>#${index + 1}</strong> <span>${cardName}</span>`;
                 list.appendChild(li);
             });
@@ -507,7 +512,6 @@
         function closeModal() {
             document.getElementById('discard-modal').style.display = "none";
         }
-
     </script>
 </body>
 
