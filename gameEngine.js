@@ -1,6 +1,10 @@
 // gameEngine.js
-import { buildInitialDecks } from './cardsData.js';
+import { buildInitialDecks, CARD_TYPES } from './cardsData.js';
+import { executeOnPlayEffect } from './cardEffects.js';
 
+/**
+ * Initializes full game state at startup
+ */
 export function initializeGameState(playerNames) {
     const { nursery, drawPile, discardPile } = buildInitialDecks();
     const players = {};
@@ -51,17 +55,35 @@ export function checkWinCondition(gameState) {
     return null;
 }
 
-export function playCardFromHand(gameState, playerName, cardIndex) {
+/**
+ * Handles playing a card from hand and triggering its onPlay effect
+ */
+export function playCardFromHand(gameState, playerName, cardIndex, targetData = {}) {
     if (gameState.phase !== 'ACTION') return { success: false, reason: "Not in Action Phase" };
 
     const player = gameState.players[playerName];
+    if (!player || cardIndex < 0 || cardIndex >= player.hand.length) {
+        return { success: false, reason: "Invalid card selection" };
+    }
+
     const card = player.hand[cardIndex];
 
-    // Execute card's specific onPlay effect
-    const result = card.onPlay(gameState, playerName);
+    // 1. Delegate card effect execution to cardEffects.js
+
+    const result = executeOnPlayEffect(gameState, playerName, card, targetData);
 
     if (result.success) {
-        // Standard play consumes the turn action and moves to END phase!
+        // Only route card if the effect hasn't already handled its location!
+        if (!result.handledDestination) {
+            player.hand.splice(cardIndex, 1);
+
+            if (card.category === CARD_TYPES.MAGIC || card.category === CARD_TYPES.INSTANT) {
+                gameState.discardPile.push(card);
+            } else {
+                player.stable.push(card);
+            }
+        }
+
         gameState.phase = 'END';
     }
 

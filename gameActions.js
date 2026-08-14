@@ -1,5 +1,6 @@
 // gameActions.js
-
+import { CARD_TYPES } from './cardsData.js';
+import { shuffle } from './cardsData.js';
 /**
  * DESTROY: Removes a card from a TARGET player's Stable and moves it to Discard.
  */
@@ -53,10 +54,19 @@ export function discardCard(gameState, playerName, cardIndexInHand) {
  */
 export function drawCard(gameState, playerName) {
     const player = gameState.players[playerName];
+    if (!player) return { success: false, reason: "Player not found!" };
+
+    // 1. If drawPile is empty, attempt an auto-reshuffle from discardPile
     if (gameState.drawPile.length === 0) {
-        return { success: false, reason: "Draw pile is empty!" };
+        shuffleDiscardIntoDrawPile(gameState);
     }
 
+    // 2. If it's STILL empty after trying to reshuffle, there are no cards left to draw!
+    if (gameState.drawPile.length === 0) {
+        return { success: false, reason: "No cards left in the deck or discard pile!" };
+    }
+
+    // 3. Draw top card from draw pile and add to hand
     const card = gameState.drawPile.pop();
     player.hand.push(card);
 
@@ -134,4 +144,65 @@ export function bringDirectlyIntoPlay(gameState, targetPlayerName, card, sourceZ
         targetPlayer: targetPlayerName,
         message: `${card.name} was brought directly into ${targetPlayerName}'s Stable!`
     };
+}
+
+// gameActions.js
+import { sendCardFromStable } from './gameEngine.js';
+
+/**
+ * GAME ACTION: Returns a card from a player's Stable to their hand.
+ * (Automatically routes Baby Unicorns to Nursery!)
+ */
+export function returnCardToHand(gameState, targetPlayerName, cardId) {
+    const targetPlayer = gameState.players[targetPlayerName];
+    if (!targetPlayer) return { success: false, reason: "Player not found" };
+
+    // sendCardFromStable handles the move + Nursery interceptor!
+    sendCardFromStable(gameState, targetPlayerName, cardId, 'hand');
+
+    return {
+        success: true,
+        message: `Returned card from ${targetPlayerName}'s Stable.`
+    };
+}
+
+export function shuffleDiscardIntoDrawPile(gameState) {
+    if (!gameState.discardPile || gameState.discardPile.length === 0) return;
+
+    // 1. Transfer all cards from discardPile to drawPile
+    gameState.drawPile.push(...gameState.discardPile);
+
+    // 2. Empty the discard pile
+    gameState.discardPile = [];
+
+    // 3. Shuffle the updated draw pile
+    shuffle(gameState.drawPile); }
+
+/**
+ * Moves a card out of a player's Stable.
+ * Intercepts Baby Unicorns automatically to send them back to the Nursery!
+ */
+export function sendCardFromStable(gameState, playerName, cardId, destination) {
+    const player = gameState.players[playerName];
+    if (!player) return;
+
+    // Find index of target card in player's stable
+    const cardIndex = player.stable.findIndex(c => c.id === cardId);
+    if (cardIndex === -1) return; // Card not in stable
+
+    // Remove card from stable
+    const [removedCard] = player.stable.splice(cardIndex, 1);
+
+    // --- BABY UNICORN INTERCEPTOR ---
+    if (removedCard.category === CARD_TYPES.BABY) {
+        gameState.nursery.push(removedCard); // Always returns to Nursery!
+        return;
+    }
+
+    // --- NORMAL CARDS ---
+    if (destination === 'discard') {
+        gameState.discardPile.push(removedCard);
+    } else if (destination === 'hand') {
+        player.hand.push(removedCard);
+    }
 }

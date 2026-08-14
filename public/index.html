@@ -66,7 +66,7 @@
         </div>
     </div>
 
-    <!-- Note lowercase 'gameboard.js' to match VS Code file name -->
+    <!-- Client-side Scripts -->
     <script src="gameboard.js"></script>
     <script src="playerHand.js"></script>
 
@@ -91,8 +91,10 @@
             document.getElementById('error').innerText = "";
             document.getElementById('status').innerText = "Connecting...";
 
+            // 1. Create WebSocket connection
             socket = new WebSocket(`${BASE_WORKER_URL}?room=${encodeURIComponent(roomCode)}`);
 
+            // 2. Open connection listener
             socket.onopen = () => {
                 document.getElementById('status').innerText = `Joined Room "${roomCode}"`;
                 socket.send(JSON.stringify({
@@ -102,14 +104,39 @@
                 }));
             };
 
+            // 3. Consolidated message handler
             socket.onmessage = (event) => {
                 const data = JSON.parse(event.data);
 
-                if (data.type === 'room_status') updateLobbyUI(data);
-                if (data.type === 'game_started') switchToGame(data);
-                if (data.type === 'room_error') document.getElementById('error').innerText = data.message;
+                // Room updates
+                if (data.type === 'room_status') {
+                    updateLobbyUI(data);
+                }
+
+                // Game setup
+                if (data.type === 'game_started') {
+                    if (typeof switchToGame === 'function') switchToGame(data);
+                    if (typeof setupHandUI === 'function') setupHandUI();
+                }
+
+                // Turn updates & Game board updates
+                if (data.type === 'turn_update' || data.type === 'state_update') {
+                    if (typeof handleTurnStateUpdate === 'function') handleTurnStateUpdate(data);
+                    if (typeof renderBoardState === 'function') renderBoardState(data.gameState);
+                }
+
+                // Player Hand updates
+                if (data.type === 'hand_update') {
+                    if (typeof updateHandDisplay === 'function') updateHandDisplay(data.hand);
+                }
+
+                // Error reporting
+                if (data.type === 'room_error') {
+                    document.getElementById('error').innerText = data.message;
+                }
             };
 
+            // 4. Connection error handling
             socket.onerror = () => {
                 document.getElementById('error').innerText = "WebSocket connection failed.";
             };
@@ -141,27 +168,6 @@
 
             document.getElementById('start-game-btn').style.display = data.playerCount >= 2 ? 'block' : 'none';
         }
-
-        socket.onmessage = (event) => {
-                const data = JSON.parse(event.data);
-
-                if (data.type === 'room_status') updateLobbyUI(data);
-
-                if (data.type === 'game_started') {
-                    switchToGame(data);
-                    setupHandUI(); // Initialize hand UI
-                }
-
-                // Turn updates broadcasted from worker.js
-                if (data.type === 'turn_update') {
-                    handleTurnStateUpdate(data);
-                }
-
-                if (data.type === 'hand_update') {
-                    updateHandDisplay(data.hand);
-                }
-            }
-            
     </script>
 </body>
 
