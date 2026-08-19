@@ -66,6 +66,22 @@
         </div>
     </div>
 
+    <!-- CUTE GAME OVER / VICTORY MODAL -->
+    <div id="game-over-modal"
+        style="display: none; position: fixed; z-index: 10000; left: 0; top: 0; width: 100%; height: 100%; background-color: rgba(15, 23, 42, 0.65); backdrop-filter: blur(4px); align-items: center; justify-content: center;">
+        <div
+            style="background: #ffffff; padding: 32px 28px; border-radius: 24px; text-align: center; max-width: 420px; width: 88%; box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.2); position: relative; border: 4px solid #f472b6;">
+            <div id="game-over-emoji" style="font-size: 4rem; margin-bottom: 8px;">🏆</div>
+            <h2 id="game-over-title" style="margin: 0; color: #db2777; font-size: 2rem; font-weight: 800;">Victory!</h2>
+            <p id="game-over-message"
+                style="font-size: 1.05rem; color: #475569; margin: 16px 0 28px; line-height: 1.6;"></p>
+            <button onclick="location.reload()"
+                style="background: linear-gradient(135deg, #ec4899, #a855f7); color: white; border: none; padding: 14px 32px; border-radius: 30px; font-weight: bold; font-size: 1.05rem; cursor: pointer; box-shadow: 0 6px 16px rgba(236, 72, 153, 0.35); transition: transform 0.15s ease;">
+                Play Again 🔄
+            </button>
+        </div>
+    </div>
+
     <!-- Client-side Scripts -->
     <script src="gameboard.js"></script>
     <script src="playerHand.js"></script>
@@ -96,7 +112,7 @@
 
             // 2. Open connection listener
             socket.onopen = () => {
-                document.getElementById('status').innerText = `Joined Room "${roomCode}"`;
+                document.getElementById('status').innerText = `Joined Room "${currentRoomCode}"`;
                 socket.send(JSON.stringify({
                     type: 'join_room',
                     roomCode: currentRoomCode,
@@ -108,31 +124,46 @@
             socket.onmessage = (event) => {
                 const data = JSON.parse(event.data);
 
-                // Room updates
                 if (data.type === 'room_status') {
-                    updateLobbyUI(data);
+                    if (typeof updateLobbyUI === 'function') {
+                        updateLobbyUI(data);
+                    }
                 }
+                else if (data.type === 'game_started' || data.type === 'turn_update') {
+                    // 1. Switch Screens
+                    const lobbyEl = document.getElementById('lobby-screen');
+                    const gameEl = document.getElementById('game-screen');
 
-                // Game setup
-                if (data.type === 'game_started') {
-                    if (typeof switchToGame === 'function') switchToGame(data);
-                    if (typeof setupHandUI === 'function') setupHandUI();
+                    if (lobbyEl) lobbyEl.style.display = 'none';
+                    if (gameEl) gameEl.style.display = 'block';
+
+                    // 2. Render Stables & Central Board
+                    if (data.gameState && typeof renderBoardState === 'function') {
+                        renderBoardState(data.gameState);
+                    }
+
+                    // 3. FIX: Pass privateHand sent by worker.js to populate myHand
+                    if (data.privateHand && typeof renderPlayerHand === 'function') {
+                        renderPlayerHand(data.privateHand);
+                    }
+
+                    // 4. Update Turn Banner & Action Buttons
+                    if (data.gameState && typeof handleTurnStateUpdate === 'function') {
+                        handleTurnStateUpdate(data.gameState);
+                    }
                 }
-
-                // Turn updates & Game board updates
-                if (data.type === 'turn_update' || data.type === 'state_update') {
-                    if (typeof handleTurnStateUpdate === 'function') handleTurnStateUpdate(data);
-                    if (typeof renderBoardState === 'function') renderBoardState(data.gameState);
+                else if (data.type === 'hand_update') {
+                    // 4. Update Cards in Private Hand
+                    if (typeof renderPlayerHand === 'function') {
+                        renderPlayerHand(data.hand);
+                    }
                 }
-
-                // Player Hand updates
-                if (data.type === 'hand_update') {
-                    if (typeof updateHandDisplay === 'function') updateHandDisplay(data.hand);
+                else if (data.type === 'game_over') {
+                    // 5. Trigger Game Over Celebration Modal
+                    showGameOverModal(data.winner);
                 }
-
-                // Error reporting
-                if (data.type === 'room_error') {
-                    document.getElementById('error').innerText = data.message;
+                else if (data.type === 'room_error') {
+                    alert(`Error: ${data.message}`);
                 }
             };
 
@@ -152,7 +183,9 @@
 
         function updateLobbyUI(data) {
             document.getElementById('join-form').style.display = 'none';
-            document.getElementById('status').innerText = `Room: "${data.roomCode}"`;
+
+            // ✅ FIX: Use local currentRoomCode instead of data.roomCode
+            document.getElementById('status').innerText = `Room: "${currentRoomCode}"`;
             document.getElementById('lobby-info').style.display = 'block';
 
             document.getElementById('count').innerText = data.playerCount;
@@ -167,6 +200,34 @@
             });
 
             document.getElementById('start-game-btn').style.display = data.playerCount >= 2 ? 'block' : 'none';
+        }
+
+        /**
+         * 🦄 CUTE END GAME MODAL DISPLAY
+         */
+        function showGameOverModal(winner) {
+            const modal = document.getElementById('game-over-modal');
+            const titleEl = document.getElementById('game-over-title');
+            const messageEl = document.getElementById('game-over-message');
+            const emojiEl = document.getElementById('game-over-emoji');
+
+            if (!modal) return;
+
+            const isWinner = (myPlayerName === winner);
+
+            if (isWinner) {
+                emojiEl.innerText = "👑✨";
+                titleEl.innerText = "YAY! YOU WON!";
+                titleEl.style.color = "#db2777";
+                messageEl.innerHTML = `🎉 <strong>Congratulations, ${winner}!</strong> 🎉<br>You assembled 7 magical Unicorns and built the ultimate Stable! You are officially the Supreme Unicorn Ruler! 🦄🌈`;
+            } else {
+                emojiEl.innerText = "🌈💖";
+                titleEl.innerText = "GAME OVER!";
+                titleEl.style.color = "#7c3aed";
+                messageEl.innerHTML = `👑 <strong>${winner}</strong> won the game with 7 Unicorns!<br><br>Don't be sad, sweet player! Your unicorns still love you standard & soft! You'll get 'em next time! 🦄💕`;
+            }
+
+            modal.style.display = 'flex';
         }
     </script>
 </body>

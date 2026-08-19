@@ -3,8 +3,10 @@
   "version": "1.0.0",
   "description": "Unstable Unicorns real-time multiplayer game",
   "main": "worker.js",
+  "type": "module",
   "scripts": {
-    "deploy": "wrangler deploy"
+    "deploy": "wrangler deploy",
+    "test:bot": "node simulate.js"
   },
   "devDependencies": {
     "wrangler": "^3.0.0"

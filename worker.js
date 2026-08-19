@@ -1,33 +1,36 @@
-// worker.js
-import { initializeGameState, nextTurn, checkWinCondition, playCardFromHand } from './gameEngine.js';
-import { drawCard } from './gameActions.js';
+import { initializeGameState, nextTurn, checkWinCondition, resolveChoice } from './gameEngine.js';
+import { drawCard, playCardFromHand } from './gameActions.js';
 
 export class GameRoom {
     constructor(state, env) {
         this.state = state;
         this.env = env;
-        this.sessions = new Map(); // Stores active WebSocket connections: ws -> playerName
-        this.gameState = null;     // Stores full active game state
+        this.sessions = new Map(); // ws -> playerName
+        this.gameState = null;     // active game state
+    }
+
+    /**
+     * Helper to reliably obtain the active turn player name
+     */
+    getActivePlayer() {
+        if (!this.gameState) return null;
+        return this.gameState.currentTurn || this.gameState.currentPlayer || this.gameState.currentTurnPlayer;
     }
 
     /**
      * Cloudflare Durable Object HTTP / WebSocket Entry Point
      */
     async fetch(request) {
-        // Check if client is requesting a WebSocket upgrade
         const upgradeHeader = request.headers.get("Upgrade");
-        if (!upgradeHeader || upgradeHeader !== "websocket") {
-            return new Response("Expected WebSocket connection", { status: 426 });
+        if (!upgradeHeader || upgradeHeader.toLowerCase() !== "websocket") {
+            return new Response("This Durable Object endpoint expects a WebSocket connection.", { status: 426 });
         }
 
-        // Create WebSocket pair (Client <-> Server)
         const pair = new WebSocketPair();
         const [client, server] = Object.values(pair);
 
-        // Accept WebSocket connection inside Durable Object
         server.accept();
 
-        // Register event listeners on server socket
         server.addEventListener("message", async (event) => {
             try {
                 const data = JSON.parse(event.data);
@@ -37,10 +40,15 @@ export class GameRoom {
             }
         });
 
-        server.addEventListener("close", () => {
-            this.sessions.delete(server);
-            this.broadcastRoomStatus();
-        });
+        const cleanupSocket = () => {
+            if (this.sessions.has(server)) {
+                this.sessions.delete(server);
+                this.broadcastRoomStatus();
+            }
+        };
+
+        server.addEventListener("close", cleanupSocket);
+        server.addEventListener("error", cleanupSocket);
 
         return new Response(null, { status: 101, webSocket: client });
     }
@@ -63,11 +71,8 @@ export class GameRoom {
                     return;
                 }
 
-                // Initialize Decks and Game State from gameEngine.js
                 this.gameState = initializeGameState(playerNames);
-
-                // Notify everyone that the game started
-                this.broadcast({ type: "game_started", gameState: this.gameState });
+                this.broadcast({ type: "game_started" });
                 this.broadcastStateUpdate();
                 break;
             }
@@ -75,14 +80,18 @@ export class GameRoom {
             case "draw_card": {
                 if (!this.gameState) return;
                 const playerName = this.sessions.get(ws);
-                const activePlayer = this.gameState.playerOrder[this.gameState.activePlayerIndex];
+                if (playerName !== this.getActivePlayer()) return;
 
-                if (playerName !== activePlayer) return;
+                if (this.gameState.phase === 'ACTION' && !this.gameState.pendingChoice) {
+                    const result = drawCard(this.gameState, playerName);
 
-                if (this.gameState.phase === 'DRAW') {
-                    drawCard(this.gameState, playerName);
-                    this.gameState.phase = 'ACTION'; // Move automatically to ACTION phase
-                    this.broadcastStateUpdate();
+                    if (result && result.success === false) {
+                        ws.send(JSON.stringify({ type: "room_error", message: result.reason || "Failed to draw card" }));
+                        return;
+                    }
+
+                    nextTurn(this.gameState);
+                    this.evaluateGameState();
                 }
                 break;
             }
@@ -90,15 +99,32 @@ export class GameRoom {
             case "play_card": {
                 if (!this.gameState) return;
                 const playerName = this.sessions.get(ws);
-                const activePlayer = this.gameState.playerOrder[this.gameState.activePlayerIndex];
-
-                if (playerName !== activePlayer) return;
+                if (playerName !== this.getActivePlayer()) return;
 
                 const result = playCardFromHand(this.gameState, playerName, data.cardIndex, data.targetData);
                 if (!result.success) {
                     ws.send(JSON.stringify({ type: "room_error", message: result.reason }));
                 } else {
-                    this.broadcastStateUpdate();
+                    if (!result.requiresChoice) {
+                        nextTurn(this.gameState);
+                    }
+                    this.evaluateGameState();
+                }
+                break;
+            }
+
+            case "resolve_choice": {
+                if (!this.gameState) return;
+                const playerName = this.sessions.get(ws);
+
+                const result = resolveChoice(this.gameState, playerName, data);
+                if (!result.success) {
+                    ws.send(JSON.stringify({ type: "room_error", message: result.reason }));
+                } else {
+                    if (!result.requiresChoice && this.gameState.phase === 'END') {
+                        nextTurn(this.gameState);
+                    }
+                    this.evaluateGameState();
                 }
                 break;
             }
@@ -106,26 +132,30 @@ export class GameRoom {
             case "end_turn": {
                 if (!this.gameState) return;
                 const playerName = this.sessions.get(ws);
-                const activePlayer = this.gameState.playerOrder[this.gameState.activePlayerIndex];
-
-                if (playerName !== activePlayer) return;
+                if (playerName !== this.getActivePlayer()) return;
 
                 nextTurn(this.gameState);
-
-                const winner = checkWinCondition(this.gameState);
-                if (winner) {
-                    this.broadcast({ type: 'game_over', winner: winner });
-                } else {
-                    this.broadcastStateUpdate();
-                }
+                this.evaluateGameState();
                 break;
             }
         }
     }
 
     /**
-     * Sends lobby player count to all connected clients
+     * Checks win condition and updates game phase accordingly
      */
+    evaluateGameState() {
+        const winner = checkWinCondition(this.gameState);
+        if (winner) {
+            this.gameState.phase = 'GAME_OVER';
+            this.gameState.winner = winner;
+            this.broadcastStateUpdate();
+            this.broadcast({ type: 'game_over', winner: winner });
+        } else {
+            this.broadcastStateUpdate();
+        }
+    }
+
     broadcastRoomStatus() {
         const players = Array.from(this.sessions.values());
         this.broadcast({
@@ -136,33 +166,43 @@ export class GameRoom {
         });
     }
 
+    getSanitizedGameState(targetPlayerName) {
+        if (!this.gameState) return null;
+
+        const sanitized = JSON.parse(JSON.stringify(this.gameState));
+
+        if (sanitized.players) {
+            for (const pName in sanitized.players) {
+                const pData = sanitized.players[pName];
+                pData.handCount = Array.isArray(pData.hand) ? pData.hand.length : 0;
+
+                if (pName !== targetPlayerName) {
+                    delete pData.hand;
+                }
+            }
+        }
+
+        return sanitized;
+    }
+
     /**
-     * Broadcasts public gameState + private player hands to each individual socket
+     * Sends unified state and hand updates per connected socket
      */
     broadcastStateUpdate() {
         if (!this.gameState) return;
 
         for (const [ws, playerName] of this.sessions.entries()) {
-            // 1. Send public state to this player
+            const publicState = this.getSanitizedGameState(playerName);
+            const playerData = this.gameState.players[playerName];
+
             ws.send(JSON.stringify({
                 type: 'turn_update',
-                gameState: this.gameState
+                gameState: publicState,
+                privateHand: playerData ? playerData.hand || [] : []
             }));
-
-            // 2. Send private hand specifically to this player
-            const playerData = this.gameState.players[playerName];
-            if (playerData) {
-                ws.send(JSON.stringify({
-                    type: 'hand_update',
-                    hand: playerData.hand
-                }));
-            }
         }
     }
 
-    /**
-     * Helper to send a message to all connected sockets
-     */
     broadcast(message) {
         const jsonStr = JSON.stringify(message);
         for (const ws of this.sessions.keys()) {
@@ -171,20 +211,24 @@ export class GameRoom {
     }
 }
 
-/**
- * --- REQUIRED ES MODULE ENTRY POINT ---
- * This worker receives HTTP requests, extracts room name, and routes to Durable Object
- */
 export default {
     async fetch(request, env, ctx) {
-        const url = new URL(request.url);
-        const roomCode = url.searchParams.get("room") || "default";
+        const upgradeHeader = request.headers.get("Upgrade");
 
-        // Get Durable Object Instance ID for this room name
-        const id = env.GAME_ROOM.idFromName(roomCode);
-        const roomObject = env.GAME_ROOM.get(id);
+        if (upgradeHeader && upgradeHeader.toLowerCase() === "websocket") {
+            const url = new URL(request.url);
+            const roomCode = url.searchParams.get("room") || "default";
 
-        // Pass the WebSocket request into the Durable Object
-        return roomObject.fetch(request);
+            const id = env.GAME_ROOM.idFromName(roomCode);
+            const roomObject = env.GAME_ROOM.get(id);
+
+            return roomObject.fetch(request);
+        }
+
+        if (env.ASSETS) {
+            return env.ASSETS.fetch(request);
+        }
+
+        return new Response("Assets binding not found. Please check wrangler configuration.", { status: 500 });
     }
 };
