@@ -79,7 +79,7 @@ function renderPlayerHand(handArray) {
     }
 
     const localPlayer = window.myPlayerName || (typeof myPlayerName !== 'undefined' ? myPlayerName : '');
-    const pendingChoice = (typeof latestGameState !== 'undefined' && latestGameState) ? latestGameState.pendingChoice : null;
+    const pendingChoice = (typeof window.latestGameState !== 'undefined' && window.latestGameState) ? window.latestGameState.pendingChoice : null;
 
     const isHandTargeting = pendingChoice &&
         (pendingChoice.chooser === localPlayer || (Array.isArray(pendingChoice.choosers) && pendingChoice.choosers.includes(localPlayer))) &&
@@ -151,9 +151,8 @@ function renderPlayerHand(handArray) {
 
         const imagePath = typeof getCardImagePath === 'function' && card
             ? getCardImagePath(category, fileName)
-            : `image/${category}/${fileName}`;
+            : encodeURI(`/image/${category}/${fileName}`);
 
-        // FIX: Reliable placehold.co fallback URL instead of via.placeholder.com
         cardElement.innerHTML = `
             <img src="${imagePath}" alt="${card ? (card.name || 'Card') : 'Card'}" onerror="this.onerror=null; this.src='https://placehold.co/60x84?text=Card';" style="pointer-events: none;" />
         `;
@@ -173,7 +172,6 @@ function handleTurnStateUpdate(gameState) {
     if (typeof window !== 'undefined') {
         window.latestGameState = gameState;
     }
-    latestGameState = gameState;
 
     const localPlayer = window.myPlayerName || (typeof myPlayerName !== 'undefined' ? myPlayerName : '');
     const activePlayer = gameState.currentTurn || gameState.currentPlayer || gameState.currentTurnPlayer;
@@ -199,7 +197,7 @@ function handleTurnStateUpdate(gameState) {
             if (pendingChoice.actionType === 'NEIGH_INTERRUPT' && pendingChoice.cardPlayed) {
                 const card = pendingChoice.cardPlayed;
                 const origPlayer = pendingChoice.originalPlayer || 'A player';
-                const cardLinkHtml = `<span onmouseenter="showCardTooltip(event, latestGameState.pendingChoice.cardPlayed)" onmousemove="moveCardTooltip(event)" onmouseleave="hideCardTooltip()" style="color: #7c3aed; text-decoration: underline; font-weight: bold; cursor: pointer; padding: 0 2px;">${card.name}</span>`;
+                const cardLinkHtml = `<span onmouseenter="showCardTooltip(event, window.latestGameState.pendingChoice.cardPlayed)" onmousemove="moveCardTooltip(event)" onmouseleave="hideCardTooltip()" style="color: #7c3aed; text-decoration: underline; font-weight: bold; cursor: pointer; padding: 0 2px;">${card.name}</span>`;
 
                 if (pendingChoice.lastNeighPlayer) {
                     banner.innerHTML = `🎯 YOUR CHOICE: ${pendingChoice.lastNeighPlayer} played NEIGH on ${cardLinkHtml}! Do you want to play NEIGH to stop it?`;
@@ -270,8 +268,9 @@ function handleTurnStateUpdate(gameState) {
  * Action triggered when player clicks "Draw Card 🃏"
  */
 function drawCardAction() {
-    if (!isMyTurn || currentPhase !== 'ACTION' || (typeof latestGameState !== 'undefined' && latestGameState && latestGameState.pendingChoice)) return;
-    if (!isSocketReady()) return;
+    const state = window.latestGameState;
+    if (!state || state.phase !== 'ACTION' || state.pendingChoice) return;
+    if (!isMyTurn || !isSocketReady()) return;
 
     socket.send(JSON.stringify({
         type: 'draw_card'
@@ -289,8 +288,25 @@ function selectCardFromHand(cardIndex) {
 
     socket.send(JSON.stringify({
         type: 'resolve_choice',
+        choice: targetCardId || cardIndex,
+        cardIndex: cardIndex,
         cardIndexToDiscard: cardIndex,
+        cardId: targetCardId,
         targetCardId: targetCardId
+    }));
+}
+
+/**
+ * Action triggered when player passes/skips an optional choice
+ */
+function skipChoice() {
+    if (!isSocketReady()) return;
+
+    socket.send(JSON.stringify({
+        type: 'resolve_choice',
+        action: 'SKIP',
+        skipped: true,
+        choice: null
     }));
 }
 
@@ -298,7 +314,7 @@ function selectCardFromHand(cardIndex) {
  * Action triggered when player clicks a card in hand to play normally
  */
 function playCardFromHand(cardIndex) {
-    if (!isMyTurn || currentPhase !== 'ACTION' || (typeof latestGameState !== 'undefined' && latestGameState && latestGameState.pendingChoice)) return;
+    if (!isMyTurn || currentPhase !== 'ACTION' || (typeof window.latestGameState !== 'undefined' && window.latestGameState && window.latestGameState.pendingChoice)) return;
     if (!isSocketReady()) return;
 
     socket.send(JSON.stringify({
@@ -311,7 +327,7 @@ function playCardFromHand(cardIndex) {
  * Action triggered when player clicks "End Turn ⏭️"
  */
 function passTurn() {
-    if (!isMyTurn || (typeof latestGameState !== 'undefined' && latestGameState && latestGameState.pendingChoice)) return;
+    if (!isMyTurn || (typeof window.latestGameState !== 'undefined' && window.latestGameState && window.latestGameState.pendingChoice)) return;
     if (!isSocketReady()) return;
 
     socket.send(JSON.stringify({

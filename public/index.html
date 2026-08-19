@@ -19,7 +19,7 @@
             <button id="join-btn" onclick="joinRoom()">Join Game Room</button>
         </div>
 
-        <div id="error"></div>
+        <div id="error" style="color: #ef4444; font-weight: bold; margin-top: 8px;"></div>
         <div id="status">Enter room code to join</div>
 
         <div id="lobby-info" class="player-list" style="display: none;">
@@ -101,8 +101,17 @@
                 return;
             }
 
-            myPlayerName = playerName || "You";
+            if (!playerName) {
+                alert("Please enter your name!");
+                return;
+            }
+
+            myPlayerName = playerName;
+            window.myPlayerName = playerName;
             currentRoomCode = roomCode;
+
+            sessionStorage.setItem('playerName', playerName);
+            sessionStorage.setItem('roomCode', roomCode);
 
             document.getElementById('error').innerText = "";
             document.getElementById('status').innerText = "Connecting...";
@@ -122,59 +131,86 @@
 
             // 3. Consolidated message handler
             socket.onmessage = (event) => {
-                const data = JSON.parse(event.data);
+                let data;
+                try {
+                    data = JSON.parse(event.data);
+                } catch (err) {
+                    console.error("Failed to parse WebSocket message:", event.data);
+                    return;
+                }
 
                 if (data.type === 'room_status') {
                     if (typeof updateLobbyUI === 'function') {
                         updateLobbyUI(data);
                     }
                 }
-                else if (data.type === 'game_started' || data.type === 'turn_update') {
-                    // 1. Switch Screens
+                // 🔄 ADDED: 'game_state_update' and 'reconnect_success' to auto-bypass lobby on refresh
+                else if (
+                    data.type === 'game_started' ||
+                    data.type === 'turn_update' ||
+                    data.type === 'game_state_update' ||
+                    data.type === 'reconnect_success'
+                ) {
+                    // Switch Screens (Hide Lobby, Show Gameboard)
                     const lobbyEl = document.getElementById('lobby-screen');
                     const gameEl = document.getElementById('game-screen');
 
                     if (lobbyEl) lobbyEl.style.display = 'none';
                     if (gameEl) gameEl.style.display = 'block';
 
-                    // 2. Render Stables & Central Board
+                    // Render Stables & Central Board
                     if (data.gameState && typeof renderBoardState === 'function') {
                         renderBoardState(data.gameState);
                     }
 
-                    // 3. FIX: Pass privateHand sent by worker.js to populate myHand
-                    if (data.privateHand && typeof renderPlayerHand === 'function') {
-                        renderPlayerHand(data.privateHand);
+                    // Pass privateHand sent by worker to populate hand
+                    const handData = data.privateHand || (data.gameState?.players?.[myPlayerName]?.hand);
+                    if (handData && typeof renderPlayerHand === 'function') {
+                        renderPlayerHand(handData);
                     }
 
-                    // 4. Update Turn Banner & Action Buttons
+                    // Update Turn Banner & Action Buttons
                     if (data.gameState && typeof handleTurnStateUpdate === 'function') {
                         handleTurnStateUpdate(data.gameState);
                     }
                 }
                 else if (data.type === 'hand_update') {
-                    // 4. Update Cards in Private Hand
                     if (typeof renderPlayerHand === 'function') {
                         renderPlayerHand(data.hand);
                     }
                 }
                 else if (data.type === 'game_over') {
-                    // 5. Trigger Game Over Celebration Modal
                     showGameOverModal(data.winner);
                 }
-                else if (data.type === 'room_error') {
-                    alert(`Error: ${data.message}`);
+                else if (data.type === 'room_error' || data.type === 'error') {
+                    const errMsg = data.message || data.error || data.reason || "An error occurred";
+
+                    if (typeof showGameReminder === 'function') {
+                        showGameReminder(errMsg);
+                    } else {
+                        console.warn(errMsg);
+                    }
+
+                    const errorEl = document.getElementById('error');
+                    if (errorEl) errorEl.innerText = errMsg;
                 }
             };
 
-            // 4. Connection error handling
+            // 4. Connection error & close handlers
             socket.onerror = () => {
                 document.getElementById('error').innerText = "WebSocket connection failed.";
             };
-        }
+
+            socket.onclose = () => {
+                document.getElementById('status').innerText = "Disconnected from server.";
+            };
+        } // 👈 Correctly closes joinRoom()
 
         function requestStartGame() {
-            if (!socket || !currentRoomCode) return;
+            if (!socket || socket.readyState !== WebSocket.OPEN || !currentRoomCode) {
+                alert("Connection not ready!");
+                return;
+            }
             socket.send(JSON.stringify({
                 type: 'start_game',
                 roomCode: currentRoomCode
@@ -183,8 +219,6 @@
 
         function updateLobbyUI(data) {
             document.getElementById('join-form').style.display = 'none';
-
-            // ✅ FIX: Use local currentRoomCode instead of data.roomCode
             document.getElementById('status').innerText = `Room: "${currentRoomCode}"`;
             document.getElementById('lobby-info').style.display = 'block';
 
@@ -193,11 +227,13 @@
 
             const ul = document.getElementById('players-ul');
             ul.innerHTML = "";
-            data.players.forEach(name => {
-                const li = document.createElement('li');
-                li.innerText = name;
-                ul.appendChild(li);
-            });
+            if (Array.isArray(data.players)) {
+                data.players.forEach(name => {
+                    const li = document.createElement('li');
+                    li.innerText = name;
+                    ul.appendChild(li);
+                });
+            }
 
             document.getElementById('start-game-btn').style.display = data.playerCount >= 2 ? 'block' : 'none';
         }
@@ -229,6 +265,28 @@
 
             modal.style.display = 'flex';
         }
+    </script>
+
+    <script>
+        window.addEventListener('DOMContentLoaded', () => {
+            // 1. Check URL parameters first, then fall back to sessionStorage
+            const params = new URLSearchParams(window.location.search);
+            const name = params.get('name') || sessionStorage.getItem('playerName');
+            const room = params.get('room') || sessionStorage.getItem('roomCode');
+
+            // 2. Pre-fill the input fields so they aren't blank
+            if (name) document.getElementById('playerName').value = name;
+            if (room) document.getElementById('roomPassword').value = room;
+
+            // 3. If we have a name and room, automatically join!
+            if (name && room) {
+                setTimeout(() => {
+                    if (typeof joinRoom === 'function') {
+                        joinRoom();
+                    }
+                }, 150); // slight delay to ensure UI is ready
+            }
+        });
     </script>
 </body>
 

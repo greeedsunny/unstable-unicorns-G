@@ -59,7 +59,37 @@ export class GameRoom {
     async handleMessage(ws, data) {
         switch (data.type) {
             case "join_room": {
-                this.sessions.set(ws, data.playerName);
+                const playerName = data.playerName;
+
+                // 🔄 RECONNECT LOGIC: Check if game is in progress and player exists in active state
+                if (this.gameState && this.gameState.players && this.gameState.players[playerName]) {
+                    // Remove stale socket connection for returning player
+                    for (const [existingWs, pName] of this.sessions.entries()) {
+                        if (pName === playerName) {
+                            this.sessions.delete(existingWs);
+                        }
+                    }
+
+                    // Map new WebSocket connection to existing player name
+                    this.sessions.set(ws, playerName);
+
+                    // Send current sanitized game state and hand to instantly sync UI
+                    const publicState = this.getSanitizedGameState(playerName);
+                    const playerData = this.gameState.players[playerName];
+
+                    ws.send(JSON.stringify({
+                        type: 'turn_update',
+                        gameState: publicState,
+                        privateHand: playerData ? playerData.hand || [] : [],
+                        message: `${playerName} reconnected to the game.`
+                    }));
+
+                    this.broadcastRoomStatus();
+                    break;
+                }
+
+                // 🦄 STANDARD LOBBY JOIN
+                this.sessions.set(ws, playerName);
                 this.broadcastRoomStatus();
                 break;
             }
@@ -121,9 +151,6 @@ export class GameRoom {
                 if (!result.success) {
                     ws.send(JSON.stringify({ type: "room_error", message: result.reason }));
                 } else {
-                    if (!result.requiresChoice && this.gameState.phase === 'END') {
-                        nextTurn(this.gameState);
-                    }
                     this.evaluateGameState();
                 }
                 break;
@@ -232,3 +259,34 @@ export default {
         return new Response("Assets binding not found. Please check wrangler configuration.", { status: 500 });
     }
 };
+
+// Inside your backend server room handler (e.g., handleJoinRoom / WebSocket onMessage)
+function handlePlayerJoin(ws, { playerName, roomCode }) {
+    const playerExists = !!gameState.players[playerName];
+    const isGameInProgress = gameState.phase && gameState.phase !== 'LOBBY';
+
+    // 🔄 RECONNECT LOGIC: If the player already exists and the game is running
+    if (playerExists && isGameInProgress) {
+        // 1. Map the new WebSocket to the existing player
+        playerSockets.set(playerName, ws);
+        ws.playerName = playerName;
+
+        // 2. Immediately send the current game state to sync their screen
+        ws.send(JSON.stringify({
+            type: 'GAME_STATE_UPDATE',
+            gameState: gameState,
+            message: `${playerName} reconnected to the game.`
+        }));
+
+        return;
+    }
+
+    // 🚫 LOBBY VALIDATION: Block duplicate names only if still in the lobby
+    if (playerExists && !isGameInProgress) {
+        return ws.send(JSON.stringify({ type: 'ERROR', message: 'Name already taken in lobby.' }));
+    }
+
+    // 🦄 NEW PLAYER JOIN (Standard Lobby logic)
+    gameState.players[playerName] = { name: playerName, hand: [], stable: [], upgrades: [], downgrades: [] };
+    // ... rest of your existing join room logic
+}

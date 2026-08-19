@@ -1,13 +1,23 @@
 // cardsData.js
 
 export const CARD_TYPES = {
+    // Original Keys (preserves all existing game logic)
     BABY: 'Baby Unicorn',
     BASIC: 'Basic Unicorn',
     MAGICAL: 'Magical Unicorn',
     MAGIC: 'Magic Card',
     UPGRADE: 'Upgrade Card',
     DOWNGRADE: 'Downgrade Card',
-    INSTANT: 'Instant Card'
+    INSTANT: 'Instant Card',
+
+    // New Aliases (fixes cards defined with _UNICORN / _CARD suffix)
+    BABY_UNICORN: 'Baby Unicorn',
+    BASIC_UNICORN: 'Basic Unicorn',
+    MAGICAL_UNICORN: 'Magical Unicorn',
+    MAGIC_CARD: 'Magic Card',
+    UPGRADE_CARD: 'Upgrade Card',
+    DOWNGRADE_CARD: 'Downgrade Card',
+    INSTANT_CARD: 'Instant Card'
 };
 
 /**
@@ -816,7 +826,6 @@ export function isUnicornCard(card, gameState = null, ownerName = null) {
 
     return true;
 }
-
 export function isBabyCard(card, gameState = null, ownerName = null) {
     if (!card) return false;
     if (!isUnicornCard(card, gameState, ownerName)) return false;

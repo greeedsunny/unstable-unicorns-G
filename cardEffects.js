@@ -1706,15 +1706,29 @@ export function AlluringNarwhal(gameState, playerName, targetData = {}) {
 }
 
 export function AnnoyingFlyingUnicorn(gameState, playerName, targetData = {}) {
-    const player = gameState.players ? gameState.players[playerName] : null;
-    if (!player) return { success: false, reason: "Player not found." };
+    // 🛡️ Helper to safely find player in Object or Array formats
+    const getPlayer = (name) => {
+        if (!gameState.players || !name) return null;
+        if (Array.isArray(gameState.players)) {
+            return gameState.players.find(p => p.name === name || p.id === name);
+        }
+        return gameState.players[name] || null;
+    };
 
-    // 🛡️ Variable Normalization (Unpacks nested engine contexts)
+    const caster = getPlayer(playerName);
+    if (!caster) return { success: false, reason: "Caster player not found." };
+
     const ctx = targetData.contextData || targetData || {};
     const skipped = targetData.skipped || targetData.skip || ctx.skipped;
-    const targetPlayerName = targetData.targetPlayerName || targetData.selectedPlayer || targetData.targetPlayer || ctx.targetPlayerName;
 
-    // Optional trigger opt-out ("you may...")
+    const targetPlayerName = targetData.targetPlayerName
+        || targetData.selectedPlayer
+        || targetData.targetPlayer
+        || targetData.choice
+        || targetData.target
+        || ctx.targetPlayerName;
+
+    // Optional trigger opt-out
     if (skipped) {
         return { success: true, message: `${playerName} chose not to use Annoying Flying Unicorn's effect.` };
     }
@@ -1727,41 +1741,42 @@ export function AnnoyingFlyingUnicorn(gameState, playerName, targetData = {}) {
             requiresChoice: true,
             pendingChoice: {
                 chooser: playerName,
-                actionType: 'ANNOYING_FLYING_UNICORN', // 👈 REQUIRED ROUTING
+                actionType: 'ANNOYING_FLYING_UNICORN',
                 prompt: "Annoying Flying Unicorn: Select a player to DISCARD a card.",
                 targetScope: "ANY_PLAYER",
                 optional: true,
                 isEnterTrigger: true,
-                contextData: targetData
+                contextData: { ...ctx, ...targetData }
             }
         };
     }
 
-    const targetPlayer = gameState.players ? gameState.players[targetPlayerName] : null;
+    const targetPlayer = getPlayer(targetPlayerName);
+    if (!targetPlayer) {
+        return { success: false, reason: `Target player "${targetPlayerName}" not found.` };
+    }
 
-    if (!targetPlayer || !Array.isArray(targetPlayer.hand) || targetPlayer.hand.length === 0) {
+    if (!Array.isArray(targetPlayer.hand) || targetPlayer.hand.length === 0) {
         return { success: true, message: `${targetPlayerName} has no cards in hand to discard.` };
     }
 
     // ==========================================
     // STEP 2: TARGET PLAYER CHOOSES CARD TO DISCARD
     // ==========================================
-    const discardIdx = targetData.cardIndexToDiscard !== undefined
-        ? targetData.cardIndexToDiscard
-        : (targetData.cardIndex !== undefined ? targetData.cardIndex : (targetData.targetCardIndex !== undefined ? targetData.targetCardIndex : ctx.cardIndexToDiscard));
-
+    const rawDiscardIdx = targetData.cardIndexToDiscard ?? targetData.cardIndex ?? targetData.targetCardIndex ?? targetData.choice ?? ctx.cardIndexToDiscard;
+    const discardIdx = (rawDiscardIdx !== undefined && rawDiscardIdx !== null && !isNaN(Number(rawDiscardIdx))) ? Number(rawDiscardIdx) : undefined;
     const targetCardId = targetData.targetCardId || targetData.cardId || ctx.targetCardId;
 
     if (discardIdx === undefined && !targetCardId) {
         return {
             requiresChoice: true,
             pendingChoice: {
-                chooser: targetPlayerName, // 👈 Target player becomes the decision-maker
-                actionType: 'ANNOYING_FLYING_UNICORN', // 👈 Route back to Step 3
+                chooser: targetPlayerName, // Target player becomes decision-maker
+                actionType: 'ANNOYING_FLYING_UNICORN',
                 prompt: `Annoying Flying Unicorn: Select 1 card from your hand to DISCARD.`,
                 targetScope: "MY_HAND",
                 isEnterTrigger: true,
-                contextData: { targetPlayerName } // 👈 Carry target player forward to Step 3
+                contextData: { ...ctx, ...targetData, targetPlayerName } // Pass targetPlayerName forward
             }
         };
     }
@@ -1770,8 +1785,6 @@ export function AnnoyingFlyingUnicorn(gameState, playerName, targetData = {}) {
     // STEP 3: EXECUTE DISCARD
     // ==========================================
     let finalIndex = discardIdx;
-
-    // If card ID was provided instead of index, locate its position in hand
     if (targetCardId && finalIndex === undefined) {
         finalIndex = targetPlayer.hand.findIndex(c => c && (String(c.id) === String(targetCardId) || c === targetCardId));
     }
@@ -1780,7 +1793,12 @@ export function AnnoyingFlyingUnicorn(gameState, playerName, targetData = {}) {
         if (typeof discardCard === 'function') {
             discardCard(gameState, targetPlayerName, finalIndex);
         } else {
-            targetPlayer.hand.splice(finalIndex, 1);
+            const [discardedCard] = targetPlayer.hand.splice(finalIndex, 1);
+            if (Array.isArray(gameState.discard)) {
+                gameState.discard.push(discardedCard);
+            } else if (Array.isArray(gameState.discardPile)) {
+                gameState.discardPile.push(discardedCard);
+            }
         }
     } else {
         return { success: false, reason: "Selected card to discard was not found in player's hand." };
@@ -1791,7 +1809,6 @@ export function AnnoyingFlyingUnicorn(gameState, playerName, targetData = {}) {
         message: `${targetPlayerName} discarded a card due to Annoying Flying Unicorn!`
     };
 }
-
 export function Americorn(gameState, playerName, targetData = {}) {
     const player = gameState.players ? gameState.players[playerName] : null;
     if (!player) return { success: false, reason: "Player not found." };
@@ -1978,6 +1995,7 @@ export function ClassyNarwhal(gameState, playerName, targetData = {}) {
             pendingChoice: {
                 chooser: playerName,
                 prompt: "Classy Narwhal: You may search the deck for an Upgrade card to add to your hand",
+                actionType: 'CLASSY_NARWHAL', // 🛑 FIX: Required so resolveChoice knows to execute Step 2
                 targetScope: "SEARCH_DECK",
                 optional: true,
                 isEnterTrigger: true,
@@ -2084,20 +2102,32 @@ export function ShabbyTheNarwhal(gameState, playerName, targetData = {}) {
 }
 
 export function TheGreatNarwhal(gameState, playerName, targetData = {}) {
-    const player = gameState.players ? gameState.players[playerName] : null;
+    // 🛡️ Safe Player Lookup (Supports Array and Object structures)
+    const player = Array.isArray(gameState.players)
+        ? gameState.players.find(p => p.name === playerName || p.id === playerName)
+        : gameState.players?.[playerName];
+
     if (!player) return { success: false, reason: "Player not found." };
 
+    const ctx = targetData.contextData || targetData || {};
+
     // 1. Normalize skip flag
-    if (targetData.skipped || targetData.skip) {
-        return { success: true };
+    if (targetData.skipped || targetData.skip || ctx.skipped) {
+        return { success: true, message: `${playerName} chose not to search for a Narwhal.` };
     }
 
-    // 2. Normalize target card identifier
-    const targetCardId = targetData.targetCardId || targetData.cardId;
+    // 2. Normalize target card identifier across all possible UI payload fields
+    const targetCardId = targetData.targetCardId
+        || targetData.cardId
+        || targetData.choice
+        || targetData.target
+        || ctx.targetCardId
+        || ctx.cardId;
 
     // STEP 1: PROMPT USER WITH CARDS IN DECK THAT HAVE "NARWHAL" IN THEIR NAME
     if (!targetCardId) {
-        const narwhalCardsInDeck = (gameState.drawPile || []).filter(c => {
+        const drawPile = gameState.drawPile || gameState.deck || [];
+        const narwhalCardsInDeck = drawPile.filter(c => {
             const name = (c ? (c.name || '') : '').toString().toUpperCase();
             return name.includes('NARWHAL');
         });
@@ -2110,19 +2140,41 @@ export function TheGreatNarwhal(gameState, playerName, targetData = {}) {
             requiresChoice: true,
             pendingChoice: {
                 chooser: playerName,
-                actionType: 'THE_GREAT_NARWHAL', // 👈 Required for resolveChoice routing
+                actionType: 'THE_GREAT_NARWHAL',
                 prompt: "The Great Narwhal: You may search the deck for a card with 'Narwhal' in its name to add to your hand",
                 targetScope: "SEARCH_DECK",
                 optional: true,
                 isEnterTrigger: true,
                 options: narwhalCardsInDeck,
-                contextData: targetData
+                contextData: { ...ctx, ...targetData }
             }
         };
     }
 
     // STEP 2: EXECUTE SEARCH & SHUFFLE VIA gameActions primitive
-    return searchDeckToHand(gameState, playerName, targetCardId);
+    if (typeof searchDeckToHand === 'function') {
+        return searchDeckToHand(gameState, playerName, targetCardId);
+    }
+
+    // Fallback deck search if searchDeckToHand primitive is not in scope
+    const drawPile = gameState.drawPile || gameState.deck || [];
+    const cardIndex = drawPile.findIndex(c => c && String(c.id) === String(targetCardId));
+
+    if (cardIndex !== -1) {
+        const [drawnCard] = drawPile.splice(cardIndex, 1);
+        player.hand = player.hand || [];
+        player.hand.push(drawnCard);
+
+        // Shuffle deck
+        drawPile.sort(() => Math.random() - 0.5);
+
+        return {
+            success: true,
+            message: `${playerName} added ${drawnCard.name} from the deck to their hand and shuffled the deck.`
+        };
+    }
+
+    return { success: false, reason: "Selected Narwhal card was not found in the deck." };
 }
 export function GreedyFlyingUnicorn(gameState, playerName, targetData = {}) {
     const player = gameState.players ? gameState.players[playerName] : null;
@@ -2775,6 +2827,7 @@ export function canPlayExtraTail(gameState, targetPlayerName) {
     return targetPlayer.stable.some(card =>
         card && (
             card.category === CARD_TYPES.BASIC ||
+            card.category === CARD_TYPES.BASIC_UNICORN || // 👈 Added fallback
             card.category === "Basic Unicorn" ||
             card.type === "Basic"
         )
@@ -3018,27 +3071,38 @@ export function RainbowAura(gameState, targetPlayerName, targetCard) {
  * RAINBOW MANE
  */
 export function RainbowMane(gameState, playerName, targetData = {}) {
+    // Resolve target player (for playing onto yourself or another player)
+    const targetPlayerName = targetData.targetPlayerName || targetData.targetPlayer || playerName;
     const player = gameState.players ? gameState.players[playerName] : null;
-    if (!player) return { success: false, reason: "Player not found." };
+    const targetPlayer = gameState.players ? gameState.players[targetPlayerName] : null;
 
-    const stable = player.stable || [];
+    if (!player || !targetPlayer) return { success: false, reason: "Player not found." };
+
+    const targetStable = targetPlayer.stable || [];
+
+    // 🛡️ Safe inline helper to strictly verify Basic Unicorns
+    const isStrictlyBasic = (c) => {
+        if (!c) return false;
+        const category = (c.category || c.type || c.cardType || '').toUpperCase();
+        return category.includes('BASIC'); // Ensures it specifically matches the "Basic" category
+    };
 
     // --- 1. PLAY / ENTRY CONDITION CHECK ---
     if (targetData.isPlayConditionCheck) {
-        // Fix: Explicit arrow function prevents array index from corrupting gameState parameter
-        const hasBasicInStable = stable.some(c => isBasicUnicorn(c, gameState, playerName));
+        const hasBasicInStable = targetStable.some(c => isStrictlyBasic(c));
+
         if (!hasBasicInStable) {
             return {
                 success: false,
                 canEnter: false,
-                reason: "Rainbow Mane requires at least one Basic Unicorn in your Stable to enter play!"
+                reason: "Rainbow Mane requires at least one Basic Unicorn in that Stable to enter play!"
             };
         }
         return { success: true, canEnter: true };
     }
 
     // --- 2. BEGINNING OF TURN TRIGGER ---
-    const basicUnicornsInHand = (player.hand || []).filter(c => isBasicUnicorn(c, gameState, playerName));
+    const basicUnicornsInHand = (player.hand || []).filter(c => isStrictlyBasic(c));
 
     // Auto-pass safely if no Basic Unicorns in hand
     if (basicUnicornsInHand.length === 0) {
@@ -3050,30 +3114,39 @@ export function RainbowMane(gameState, playerName, targetData = {}) {
         return { success: true, message: "Skipped Rainbow Mane effect." };
     }
 
-    // Extract selected card index
+    // Extract selected card index or ID
     const chosenIndex = targetData.selectedCardIndex !== undefined
         ? targetData.selectedCardIndex
         : targetData.cardIndex;
 
+    const chosenCardId = targetData.cardId || targetData.targetCardId;
+
     // Prompt user to choose or skip
-    if (chosenIndex === undefined || chosenIndex === null) {
+    if ((chosenIndex === undefined || chosenIndex === null) && !chosenCardId) {
         return {
             requiresChoice: true,
             pendingChoice: {
                 chooser: playerName,
                 prompt: "Rainbow Mane: You may bring a Basic Unicorn from your hand directly into your Stable.",
-                actionType: 'RAINBOW_MANE_SELECT',
+                actionType: 'RAINBOW_MANE',
                 targetScope: 'MY_HAND',
                 optional: true,
+                allowedCardIds: basicUnicornsInHand.map(c => c.id),
                 validCards: basicUnicornsInHand,
                 contextData: targetData
             }
         };
     }
 
-    // Execute choice resolution
-    const chosenCard = player.hand[chosenIndex];
-    if (!chosenCard || !isBasicUnicorn(chosenCard, gameState, playerName)) {
+    // Resolve choice by index or card ID
+    let chosenCard = null;
+    if (chosenCardId) {
+        chosenCard = player.hand.find(c => c.id === chosenCardId);
+    } else if (chosenIndex !== undefined && chosenIndex !== null) {
+        chosenCard = player.hand[chosenIndex];
+    }
+
+    if (!chosenCard || !isStrictlyBasic(chosenCard)) {
         return { success: false, reason: "Selected card is not a valid Basic Unicorn." };
     }
 
@@ -3520,13 +3593,26 @@ export function GinormousUnicorn(gameState, playerName) {
 export function ReTarget(gameState, playerName, targetData = {}) {
     // Normalize targetData parameters from multi-step choice triggers
     const context = targetData.contextData || {};
-    const cardId = targetData.cardId || targetData.targetCardId || context.cardId;
-    const sourcePlayerName = targetData.sourcePlayerName || targetData.sourcePlayer || context.sourcePlayerName;
-    const targetPlayerName = targetData.targetPlayerName || targetData.selectedPlayer || targetData.targetPlayer;
+    const cardId = targetData.cardId || targetData.targetCardId || targetData.choice || context.cardId;
+    const targetPlayerName = targetData.targetPlayerName || targetData.selectedPlayer || targetData.targetPlayer || context.targetPlayerName;
+
+    // 🛡️ Auto-detect sourcePlayerName if the UI only sends back the clicked cardId
+    let sourcePlayerName = targetData.sourcePlayerName || targetData.sourcePlayer || context.sourcePlayerName;
+    if (cardId && !sourcePlayerName) {
+        for (const pName of (gameState.playerOrder || Object.keys(gameState.players || {}))) {
+            const p = gameState.players[pName];
+            if (!p) continue;
+            const allCards = [...(p.upgrades || []), ...(p.downgrades || []), ...(p.stable || [])];
+            if (allCards.some(c => c && c.id === cardId)) {
+                sourcePlayerName = pName;
+                break;
+            }
+        }
+    }
 
     // STEP 1: PROMPT FOR AN UPGRADE OR DOWNGRADE CARD IN PLAY
     if (!cardId || !sourcePlayerName) {
-        const selectableCards = [];
+        const allowedCardIds = [];
 
         for (const pName of (gameState.playerOrder || Object.keys(gameState.players || {}))) {
             const p = gameState.players[pName];
@@ -3542,12 +3628,12 @@ export function ReTarget(gameState, playerName, targetData = {}) {
                 if (!c) return;
                 const cat = (c.category || c.type || '').toString().toUpperCase();
                 if (cat.includes('UPGRADE') || cat.includes('DOWNGRADE')) {
-                    selectableCards.push({ cardId: c.id, card: c, owner: pName, name: c.name });
+                    allowedCardIds.push(c.id); // 🛡️ Fix 2: Frontend needs a flat array of IDs!
                 }
             });
         }
 
-        if (selectableCards.length === 0) {
+        if (allowedCardIds.length === 0) {
             return { success: false, reason: "No Upgrade or Downgrade cards in play to re-target." };
         }
 
@@ -3555,24 +3641,28 @@ export function ReTarget(gameState, playerName, targetData = {}) {
             requiresChoice: true,
             pendingChoice: {
                 chooser: playerName,
-                actionType: 'RE_TARGET_SELECT_CARD',
+                actionType: 'RE_TARGET', // 🛡️ Fix 1: Routes dynamically back to ReTarget!
                 prompt: 'Choose an Upgrade or Downgrade card to move.',
-                targetScope: 'ALL_STABLES_MODIFIERS',
-                validCards: selectableCards
+                targetScope: 'UPGRADE_OR_DOWNGRADE',
+                allowedCardIds: allowedCardIds,
+                contextData: {}
             }
         };
     }
 
     // STEP 2: PROMPT FOR DESTINATION PLAYER
     if (!targetPlayerName) {
+        const possibleTargets = Object.keys(gameState.players).filter(p => p !== sourcePlayerName);
+
         return {
             requiresChoice: true,
             pendingChoice: {
                 chooser: playerName,
-                actionType: 'RE_TARGET_SELECT_PLAYER',
+                actionType: 'RE_TARGET', // 🛡️ Fix 1: Routes dynamically back to ReTarget!
                 prompt: 'Choose a player to move the card to.',
-                targetScope: 'ALL_PLAYERS',
-                contextData: { cardId, sourcePlayerName }
+                targetScope: 'OTHER_PLAYER',
+                allowedPlayers: possibleTargets,
+                contextData: { cardId, sourcePlayerName } // Pass data to Step 3
             }
         };
     }

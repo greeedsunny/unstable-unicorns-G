@@ -1,5 +1,5 @@
 // gameEngine.js
-import { buildInitialDecks, CARD_TYPES, isUnicornCard, isBabyCard, isBasicUnicorn } from './cardsData.js';
+import { buildInitialDecks, isUnicorn, CARD_TYPES, isUnicornCard, isBabyCard, isBasicUnicorn } from './cardsData.js';
 import { drawCard, stealCard, getUnicornCount, playCardFromHand, bringDirectlyIntoPlay, sacrificeCard, destroyCard } from './gameActions.js';
 import {
     executeOnPlayEffect,
@@ -67,27 +67,28 @@ export function initializeGameState(playerNames) {
 /**
  * Internal helper to advance turn to the next player
  */
-function advanceToNextPlayer(gameState) {
-    // EXTRA TURN CHECK: If current player has an extra turn stored
+export function advanceToNextPlayer(gameState) {
+    const resetTurnActions = () => {
+        gameState.actionsLeft = 1;
+        gameState.actionsRemaining = 1;
+        gameState.hasDrawnCardThisTurn = false;
+    };
+
+    // --- 1. EXTRA TURN CHECK ---
     if (gameState.extraTurns && gameState.extraTurns > 0) {
-        gameState.extraTurns -= 1; // Consume one extra turn
+        gameState.extraTurns -= 1;
 
         const activePlayerName = gameState.currentTurn || gameState.playerOrder[gameState.currentTurnIndex || 0];
-        const player = gameState.players ? gameState.players[activePlayerName] : null;
+        drawCard(gameState, activePlayerName, 1);
 
-        // Auto-draw 1 card for the start of the extra turn
-        if (player && Array.isArray(gameState.drawPile) && gameState.drawPile.length > 0) {
-            drawCard(gameState, activePlayerName, 1);
-        }
-
-        gameState.actionsRemaining = 1;
+        resetTurnActions();
         gameState.phase = 'ACTION';
         gameState.pendingChoice = null;
 
-        return gameState; // Turn stays with the SAME player!
+        return gameState;
     }
 
-    // Standard turn advance if no extra turns remain
+    // --- 2. STANDARD TURN ADVANCE ---
     const currentIndex = typeof gameState.currentTurnIndex === 'number' ? gameState.currentTurnIndex : 0;
     const nextIndex = (currentIndex + 1) % gameState.playerOrder.length;
     const nextPlayerName = gameState.playerOrder[nextIndex];
@@ -96,18 +97,17 @@ function advanceToNextPlayer(gameState) {
     gameState.currentTurn = nextPlayerName;
     gameState.currentPlayer = nextPlayerName;
     gameState.currentTurnPlayer = nextPlayerName;
-    gameState.actionsRemaining = 1; // Reset to 1 action per turn
 
-    // AUTO-DRAW: Draw 1 card from Draw Pile into the player's hand
-    const player = gameState.players ? gameState.players[nextPlayerName] : null;
-    if (player && Array.isArray(gameState.drawPile) && gameState.drawPile.length > 0) {
-        drawCard(gameState, nextPlayerName, 1);
-    }
+    resetTurnActions();
 
-    // BEGINNING OF TURN TRIGGERS (Extra Tail, Glitter Bomb, Double Dutch, Unicorn Lasso, etc.)
+    // --- 3. AUTO-DRAW PHASE (Free turn-start draw) ---
+    drawCard(gameState, nextPlayerName, 1);
+
+    // --- 4. BEGINNING OF TURN TRIGGERS ---
     if (typeof triggerBeginningOfTurn === 'function') {
         const turnStartResult = triggerBeginningOfTurn(gameState, nextPlayerName);
         if (turnStartResult && turnStartResult.requiresChoice) {
+            turnStartResult.pendingChoice.previousPhase = 'BEGINNING_OF_TURN';
             gameState.pendingChoice = turnStartResult.pendingChoice;
             gameState.phase = 'CHOICE';
             return gameState;
@@ -165,7 +165,6 @@ export function nextTurn(gameState) {
     }
 
     // 2. CLEAR ANY LINGERING QUEUED TRIGGERS FIRST
-    // If the engine resumes nextTurn() after a choice, it must finish the queue!
     if (gameState.triggerQueue && gameState.triggerQueue.length > 0) {
         gameState.pendingChoice = gameState.triggerQueue.shift();
         gameState.phase = 'CHOICE';
@@ -173,18 +172,18 @@ export function nextTurn(gameState) {
     }
 
     // 3. RETURN UNICORN LASSO CARDS & FIRE RETURN ETB EFFECTS
-    // Note: Passed only gameState, as our upgraded function extracts everything it needs safely
-    const lassoReturnResult = returnStolenCards(gameState);
-    if (lassoReturnResult && lassoReturnResult.requiresChoice) {
-        gameState.phase = 'CHOICE';
-        gameState.pendingChoice = lassoReturnResult.pendingChoice;
-        return gameState;
+    if (typeof returnStolenCards === 'function') {
+        const lassoReturnResult = returnStolenCards(gameState);
+        if (lassoReturnResult && lassoReturnResult.requiresChoice) {
+            gameState.phase = 'CHOICE';
+            gameState.pendingChoice = lassoReturnResult.pendingChoice;
+            return gameState;
+        }
     }
 
     const activePlayer = gameState.players ? gameState.players[activePlayerName] : null;
 
     // 4. CHECK HAND SIZE LIMIT (MAX 7 CARDS)
-    // This correctly happens AFTER returns, just in case returning a card triggered a draw effect!
     if (activePlayer && Array.isArray(activePlayer.hand) && activePlayer.hand.length > 7) {
         const excess = activePlayer.hand.length - 7;
         gameState.phase = 'CHOICE';
@@ -192,12 +191,13 @@ export function nextTurn(gameState) {
             chooser: activePlayerName,
             prompt: `Hand limit reached! Discard ${excess} card${excess > 1 ? 's' : ''} to end turn.`,
             targetScope: 'MY_HAND',
-            actionType: 'DISCARD_TO_7'
+            actionType: 'DISCARD_TO_7',
+            cardsToDiscardCount: excess
         };
         return gameState;
     }
 
-    // 5. CLEANUP & ADVANCE
+    // 5. CLEANUP & ADVANCE TO NEXT PLAYER
     return advanceToNextPlayer(gameState);
 }
 
@@ -335,36 +335,50 @@ function handleBarbedWire(gameState, playerName, choiceData, pending) {
     return { success: true };
 }
 
-function handleTargetPlayerDowngrade(gameState, playerName, choiceData, pending) {
-    const targetPlayerName = choiceData.targetPlayerName || choiceData.targetPlayer || choiceData.selectedPlayer;
-    if (!targetPlayerName) {
-        return { success: false, reason: "No target player selected for Downgrade card." };
+export function handleTargetPlayerDowngrade(gameState, playerName, choiceData, pendingChoice) {
+    const targetPlayer = choiceData.targetPlayerName || choiceData.choice || choiceData.target || choiceData.selectedPlayer;
+    if (!targetPlayer) return { success: false, reason: "No target player selected." };
+
+    return playCardFromHand(gameState, playerName, pendingChoice.cardIndex, {
+        ...(pendingChoice.contextData || {}),
+        targetPlayerName: targetPlayer,
+        isChoiceResolved: true, // 🛡️ Tells the engine this target was officially verified
+        neighResolved: pendingChoice.neighResolved
+    });
+}
+
+export function handleTargetPlayerUpgrade(gameState, playerName, choiceData, pendingChoice) {
+    const targetPlayer = choiceData.targetPlayerName || choiceData.choice || choiceData.target || choiceData.selectedPlayer;
+    if (!targetPlayer) return { success: false, reason: "No target player selected." };
+
+    return playCardFromHand(gameState, playerName, pendingChoice.cardIndex, {
+        ...(pendingChoice.contextData || {}),
+        targetPlayerName: targetPlayer,
+        isChoiceResolved: true, // 🛡️ Tells the engine this target was officially verified
+        neighResolved: pendingChoice.neighResolved
+    });
+}
+
+export function handleTargetDestroy(gameState, playerName, choiceData, pendingChoice) {
+    // Safely extract the ID regardless of what the frontend named it
+    const targetId = choiceData.targetCardId || choiceData.cardId || choiceData.target;
+
+    if (!targetId) {
+        return { success: false, reason: "No target card selected." };
     }
 
-    gameState.pendingChoice = null;
-
-    const playResult = bringDirectlyIntoPlay(
-        gameState,
-        targetPlayerName,
-        pending.cardPlayed,
-        'hand',
-        pending.originalPlayer,
-        triggerEntersStable
-    );
-
-    if (!playResult || !playResult.success) {
-        return playResult || { success: false, reason: "Failed to place Downgrade card." };
+    if (typeof destroyCard !== 'function') {
+        return { success: false, reason: "Engine error: destroyCard not found." };
     }
 
-    gameState.actionsRemaining = Math.max(0, (gameState.actionsRemaining || 1) - 1);
-    if (gameState.actionsRemaining > 0) {
-        gameState.phase = 'ACTION';
-    } else {
-        gameState.phase = 'END';
-        nextTurn(gameState);
+    // Attempt to destroy the card (this automatically handles Baby Unicorn nursery routing)
+    const destroyed = destroyCard(gameState, targetId);
+
+    if (!destroyed) {
+        return { success: false, reason: "Failed to destroy the selected card. It may no longer exist." };
     }
 
-    return playResult;
+    return { success: true, message: "Card successfully destroyed!" };
 }
 
 export function handleNeighInterrupt(gameState, playerName, choiceData, pending) {
@@ -752,7 +766,6 @@ function handleDefaultEffectResolution(gameState, playerName, choiceData, pendin
 
 // --- ACTION HANDLERS ROUTING MAP ---
 
-// --- CHOICE HANDLERS MAPPING ---
 const CHOICE_HANDLERS = {
     // Universal Engine Mechanics
     DISCARD_TO_7: handleDiscardTo7,
@@ -764,20 +777,26 @@ const CHOICE_HANDLERS = {
     BARBED_WIRE: handleBarbedWire,
     BARBED_WIRE_DISCARD: handleBarbedWire,
     TARGET_PLAYER_DOWNGRADE: handleTargetPlayerDowngrade,
+    TARGET_PLAYER_UPGRADE: handleTargetPlayerUpgrade,
+
+    // Card Targeting Mechanics
+    TARGET_DESTROY: handleTargetDestroy,
+    TARGET_CARD_DESTROY: handleTargetDestroy,
 
     // Turn Phase Queues
     SADISTIC_RITUAL: handleSadisticRitual,
     RHINOCORN: handleRhinocorn
 };
 
-// --- MAIN FUNCTION ---
-
 export function resolveChoice(gameState, playerName, choiceData = {}) {
     const pending = gameState.pendingChoice;
     if (!pending) return { success: false, reason: "No choice pending" };
 
-    // 🛡️ Preserve original phase context so chained choices never lose phase state
-    const originPhase = pending.previousPhase || gameState.previousPhase || gameState.phase || 'ACTION';
+    let originPhase = pending.previousPhase || gameState.previousPhase || gameState.phase || 'ACTION';
+
+    if (originPhase === 'CHOICE') {
+        originPhase = 'ACTION';
+    }
 
     // --- 1. VALIDATE CHOOSER PERMISSIONS ---
     if (pending.choosers && Array.isArray(pending.choosers)) {
@@ -788,7 +807,7 @@ export function resolveChoice(gameState, playerName, choiceData = {}) {
         return { success: false, reason: `Waiting for ${pending.chooser} to make a choice` };
     }
 
-    // --- 2. EXECUTE HANDLER (EXPLICIT OR DYNAMIC FALLBACK) ---
+    // --- 2. EXECUTE HANDLER WITH STANDARDIZED PAYLOAD NORMALIZATION ---
     let handler = (typeof CHOICE_HANDLERS !== 'undefined' && CHOICE_HANDLERS) ? CHOICE_HANDLERS[pending.actionType] : null;
 
     if (!handler && pending.actionType) {
@@ -802,13 +821,22 @@ export function resolveChoice(gameState, playerName, choiceData = {}) {
 
         if (targetModule && typeof targetModule[functionName] === 'function') {
             handler = (g, p, cData, pChoice) => {
-                // Merge context while preserving step 1 parameters
                 const mergedContext = {
                     ...(pChoice.contextData || {}),
                     ...cData
                 };
 
-                // 🛡️ Fix: DO NOT overwrite existing context data with undefined values!
+                // Standardized Payload Mapping
+                const choiceVal = cData.choice ?? cData.target ?? cData.selectedPlayer ?? cData.targetPlayer ?? cData.playerChoice ?? cData.targetPlayerName;
+                if (choiceVal && typeof choiceVal === 'string') {
+                    mergedContext.targetPlayerName = choiceVal;
+                }
+
+                const cardIdx = cData.cardIndexToDiscard ?? cData.cardIndex ?? cData.targetCardIndex ?? (typeof choiceVal === 'number' ? choiceVal : undefined);
+                if (cardIdx !== undefined && cardIdx !== null) {
+                    mergedContext.cardIndexToDiscard = Number(cardIdx);
+                }
+
                 if (cData.targetCardId || cData.cardId) {
                     mergedContext.targetCardId = cData.targetCardId || cData.cardId;
                 }
@@ -839,11 +867,12 @@ export function resolveChoice(gameState, playerName, choiceData = {}) {
         return result || { success: false, reason: "Choice resolution failed." };
     }
 
-    // --- 3. HANDLE MULTI-PLAYER CHOOSERS ---
+    // --- 3. MULTI-PLAYER CHOOSERS ---
     if (pending.choosers && Array.isArray(pending.choosers)) {
         pending.choosers = pending.choosers.filter(p => p !== playerName);
         if (pending.choosers.length > 0) {
             return {
+                ...result,
                 success: true,
                 message: `Choice recorded for ${playerName}. Waiting for remaining players.`,
                 requiresChoice: true,
@@ -852,9 +881,8 @@ export function resolveChoice(gameState, playerName, choiceData = {}) {
         }
     }
 
-    // --- 4. HANDLE CHAINED NEXT CHOICE ---
+    // --- 4. CHAINED NEXT CHOICE ---
     if (result.requiresChoice && result.pendingChoice) {
-        // 🛡️ Fix: Inherit previousPhase so chained choices never lose origin phase
         result.pendingChoice.previousPhase = result.pendingChoice.previousPhase || originPhase;
         gameState.pendingChoice = result.pendingChoice;
         gameState.phase = 'CHOICE';
@@ -877,13 +905,14 @@ export function resolveChoice(gameState, playerName, choiceData = {}) {
         }
     }
 
-    // --- 6. PROCESS GENERIC TRIGGER QUEUE (Fix for Choice Collisions) ---
+    // --- 6. PROCESS TRIGGER QUEUES ---
     if (gameState.triggerQueue && gameState.triggerQueue.length > 0) {
         const nextChoice = gameState.triggerQueue.shift();
         nextChoice.previousPhase = nextChoice.previousPhase || originPhase;
         gameState.pendingChoice = nextChoice;
         gameState.phase = 'CHOICE';
         return {
+            ...result,
             success: true,
             requiresChoice: true,
             pendingChoice: gameState.pendingChoice,
@@ -891,14 +920,37 @@ export function resolveChoice(gameState, playerName, choiceData = {}) {
         };
     }
 
-    // --- 7. PROCESS TURN TRIGGER QUEUE OR RESTORE PHASE ---
-    if (originPhase === 'BEGINNING_OF_TURN' && gameState.turnTriggers?.length > 0 && typeof processNextTurnTrigger === 'function') {
-        return processNextTurnTrigger(gameState, playerName);
+    // --- 7. CENTRALIZED PHASE RESTORATION & TURN ADVANCEMENT ---
+    gameState.pendingChoice = null;
+
+    const isEndOfTurnChoice = pending.actionType === 'DISCARD_TO_7' || pending.actionType === 'LASSO_RETURN';
+
+    if (originPhase === 'BEGINNING_OF_TURN') {
+        if (gameState.turnTriggers?.length > 0 && typeof processNextTurnTrigger === 'function') {
+            return processNextTurnTrigger(gameState, playerName);
+        }
+        gameState.phase = 'ACTION';
+    } else if (originPhase === 'END_OF_TURN' || isEndOfTurnChoice) {
+        if (typeof nextTurn === 'function') {
+            nextTurn(gameState);
+        }
+    } else if (originPhase === 'ACTION') {
+        // 🛡️ Smart Action Check: Advance turn ONLY if no actions remain
+        if (gameState.actionsLeft <= 0) {
+            if (typeof nextTurn === 'function') {
+                nextTurn(gameState);
+            }
+        } else {
+            gameState.phase = 'ACTION';
+        }
+    } else {
+        gameState.phase = originPhase;
     }
 
-    gameState.pendingChoice = null;
-    gameState.phase = originPhase;
-    return result;
+    return {
+        success: true,
+        message: result.message || "Choice resolved successfully."
+    };
 }
 
 // Helper to evaluate hand limits and transition the active player's turn

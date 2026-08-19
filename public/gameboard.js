@@ -1,5 +1,27 @@
 // public/gameboard.js
 
+/**
+ * Helper to identify Unicorn cards globally
+ */
+window.isUnicornCard = function (card, gameState = null, ownerName = null) {
+    if (!card) return false;
+    const cat = (card.category || card.type || '').toString().toUpperCase();
+    return cat.includes('UNICORN') || card.isUnicorn === true;
+};
+
+/**
+ * Helper to identify Baby Unicorn cards globally
+ */
+window.isBabyCard = function (card, gameState = null, ownerName = null) {
+    if (!card) return false;
+    if (typeof window.isUnicornCard === 'function' && !window.isUnicornCard(card, gameState, ownerName)) {
+        return false;
+    }
+
+    const cat = (card.category || card.type || '').toString().toUpperCase();
+    return cat.includes('BABY') || card.isBaby === true;
+};
+
 let latestGameState = null;
 
 /**
@@ -19,43 +41,42 @@ function updatePileCounts(nurseryCount, drawCount, discardCount) {
  * Helper to construct the correct image path considering category subfolders
  */
 function getCardImagePath(category, fileName) {
-    if (!fileName) return '';
+    if (!fileName) return 'https://placehold.co/60x84?text=Card';
 
     let cleanFile = fileName.replace(/^\/?(images?\/)?/, '');
-    if (cleanFile.includes('/')) {
-        return `image/${cleanFile}`;
-    }
+    const safeCategory = (category || '').toString().toUpperCase().replace(/ /g, '_');
 
     const folderMap = {
         'BABY': 'Baby Unicorn',
-        'Baby Unicorns': 'Baby Unicorn',
-        'Baby Unicorn': 'Baby Unicorn',
+        'BABY_UNICORN': 'Baby Unicorn',
+        'BABY_UNICORNS': 'Baby Unicorn',
         'BASIC': 'Basic Unicorn',
-        'Basic Unicorns': 'Basic Unicorn',
-        'Basic Unicorn': 'Basic Unicorn',
+        'BASIC_UNICORN': 'Basic Unicorn',
+        'BASIC_UNICORNS': 'Basic Unicorn',
         'MAGICAL': 'Magical Unicorn',
-        'Magical Unicorns': 'Magical Unicorn',
-        'Magical Unicorn': 'Magical Unicorn',
+        'MAGICAL_UNICORN': 'Magical Unicorn',
+        'MAGICAL_UNICORNS': 'Magical Unicorn',
         'MAGIC': 'Magic Card',
-        'Magic Cards': 'Magic Card',
-        'Magic Card': 'Magic Card',
+        'MAGIC_CARD': 'Magic Card',
+        'MAGIC_CARDS': 'Magic Card',
         'UPGRADE': 'Upgrade Card',
-        'Upgrade Cards': 'Upgrade Card',
-        'Upgrade Card': 'Upgrade Card',
+        'UPGRADE_CARD': 'Upgrade Card',
+        'UPGRADE_CARDS': 'Upgrade Card',
         'DOWNGRADE': 'Downgrade Card',
-        'Downgrade Cards': 'Downgrade Card',
-        'Downgrade Card': 'Downgrade Card',
+        'DOWNGRADE_CARD': 'Downgrade Card',
+        'DOWNGRADE_CARDS': 'Downgrade Card',
         'INSTANT': 'Instant Card',
-        'Instant Cards': 'Instant Card',
-        'Instant Card': 'Instant Card'
+        'INSTANT_CARD': 'Instant Card',
+        'INSTANT_CARDS': 'Instant Card'
     };
 
-    const folderName = folderMap[category] || category || '';
-    return folderName
-        ? `image/${encodeURIComponent(folderName)}/${cleanFile}`
-        : `image/${cleanFile}`;
-}
+    const folderName = folderMap[safeCategory] || category || '';
+    const fullPath = cleanFile.includes('/')
+        ? `/image/${cleanFile}`
+        : (folderName ? `/image/${folderName}/${cleanFile}` : `/image/${cleanFile}`);
 
+    return encodeURI(fullPath);
+}
 /**
  * Helper to build visual card elements
  */
@@ -86,7 +107,7 @@ function createCardElement(card, isSelectable = false, onClickHandler = null) {
 
     if (isSelectable && onClickHandler) {
         cardDiv.onclick = (e) => {
-            e.stopPropagation(); // Stop event propagation to player box
+            e.stopPropagation();
             onClickHandler(e);
         };
     }
@@ -100,6 +121,10 @@ function createCardElement(card, isSelectable = false, onClickHandler = null) {
         img.src = getCardImagePath(category, fileName);
         img.alt = cardName || 'Card';
         img.style.cssText = "width:100%; height:100%; object-fit:cover; border-radius:6px; pointer-events:none;";
+        img.onerror = function () {
+            this.onerror = null;
+            this.src = 'https://placehold.co/60x84?text=Card';
+        };
         cardDiv.appendChild(img);
     } else {
         cardDiv.innerText = cardName || 'Unknown Card';
@@ -115,8 +140,11 @@ function selectTargetCard(targetPlayerName, targetCardId) {
     if (typeof socket !== 'undefined' && socket) {
         socket.send(JSON.stringify({
             type: 'resolve_choice',
-            targetPlayerName: targetPlayerName,
-            targetCardId: targetCardId
+            choice: targetCardId,
+            targetCardId: targetCardId,
+            cardId: targetCardId,
+            targetPlayer: targetPlayerName,
+            targetPlayerName: targetPlayerName
         }));
     }
 }
@@ -128,6 +156,8 @@ function selectTargetPlayer(targetPlayerName) {
     if (typeof socket !== 'undefined' && socket) {
         socket.send(JSON.stringify({
             type: 'resolve_choice',
+            choice: targetPlayerName,
+            targetPlayer: targetPlayerName,
             targetPlayerName: targetPlayerName
         }));
     }
@@ -140,7 +170,9 @@ function skipChoice() {
     if (typeof socket !== 'undefined' && socket) {
         socket.send(JSON.stringify({
             type: 'resolve_choice',
-            skipped: true
+            action: 'SKIP',
+            skipped: true,
+            choice: null
         }));
     }
 }
@@ -207,9 +239,6 @@ function setupStablesContainers(playerOrder) {
     });
 }
 
-/**
- * Populates cards and active turn status into generated DOM elements
- */
 /**
  * Populates cards and active turn status into generated DOM elements
  */
@@ -330,7 +359,12 @@ function renderBoardState(gameState) {
             if (unicornsContainer) unicornsContainer.innerHTML = '';
             if (upgradesContainer) upgradesContainer.innerHTML = '';
 
-            const allStableCards = [...(player.stable || []), ...(player.upgrades || [])];
+            // Combine stable, upgrades, and downgrades safely
+            const allStableCards = [
+                ...(player.stable || []),
+                ...(player.upgrades || []),
+                ...(player.downgrades || [])
+            ];
 
             if (allStableCards.length === 0) {
                 if (unicornsContainer) {
@@ -360,7 +394,6 @@ function renderBoardState(gameState) {
                 exposedHandContainer.style.display = 'none';
             }
 
-            // Inside renderBoardState(), update card selectable evaluation:
             allStableCards.forEach(card => {
                 let isSelectable = false;
 
@@ -372,7 +405,6 @@ function renderBoardState(gameState) {
                     const scope = pendingChoice.targetScope;
                     const isMyStable = (playerName === localPlayer);
 
-                    // Highlight Black Knight Unicorn when protection prompt is active
                     if ((pendingChoice.actionType === 'BLACK_KNIGHT_UNICORN_PROTECT' || scope === 'PROTECTION_CHOICE') && isMyStable) {
                         if (card.id === 'black_knight_unicorn' || card.name === 'Black Knight Unicorn') {
                             isSelectable = true;
@@ -452,7 +484,7 @@ function showDiscardPile() {
             const imagePath = getCardImagePath(category, fileName);
 
             li.innerHTML = `
-                <img src="${imagePath}" alt="${card.name || 'Card'}" style="width: 45px; height: 63px; object-fit: cover; border-radius: 4px; border: 1px solid #cbd5e1;" onerror="this.onerror=null; this.src='https://via.placeholder.com/45x63?text=Card';" />
+                <img src="${imagePath}" alt="${card.name || 'Card'}" style="width: 45px; height: 63px; object-fit: cover; border-radius: 4px; border: 1px solid #cbd5e1;" onerror="this.onerror=null; this.src='https://placehold.co/45x63?text=Card';" />
                 <div style="flex: 1;">
                     <strong style="display: block; color: #1e293b; font-size: 0.95rem;">${card.name || 'Unknown Card'}</strong>
                     <span style="display: block; color: #64748b; font-size: 0.8rem; margin-top: 2px;">${card.effect || card.description || 'No description'}</span>
@@ -535,13 +567,9 @@ function hideCardTooltip() {
 }
 
 /**
- * Renders a popup modal for deck or discard pile searches.
- */
-/**
- * Renders a popup modal for deck or discard pile searches.
+ * Renders a popup modal for deck, discard, or target hand searches.
  */
 function renderSearchModal(gameState, myPlayerName, socket) {
-    // 1. Remove any existing search modal first
     const existingModal = document.getElementById('search-modal-overlay');
     if (existingModal) {
         existingModal.remove();
@@ -549,57 +577,84 @@ function renderSearchModal(gameState, myPlayerName, socket) {
 
     const pendingChoice = gameState ? gameState.pendingChoice : null;
 
-    // 2. Check if there is a pending choice meant for THIS player
+    const isMyChoice = pendingChoice && (
+        pendingChoice.chooser === myPlayerName ||
+        (Array.isArray(pendingChoice.choosers) && pendingChoice.choosers.includes(myPlayerName))
+    );
+
     if (
-        pendingChoice &&
-        pendingChoice.chooser === myPlayerName &&
+        isMyChoice &&
         (
             pendingChoice.targetScope === 'SEARCH_DECK' ||
             pendingChoice.targetScope === 'SEARCH_DISCARD' ||
-            pendingChoice.targetScope === 'TARGET_HAND' // 👈 ADD THIS: Displays popup when stealing target player's hand card
+            pendingChoice.targetScope === 'TARGET_HAND'
         )
     ) {
-        // Overlay background
         const overlay = document.createElement('div');
         overlay.id = 'search-modal-overlay';
         overlay.style.cssText = 'position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0, 0, 0, 0.6); display: flex; justify-content: center; align-items: center; z-index: 10000;';
 
-        // Modal content container
         const modal = document.createElement('div');
         modal.style.cssText = 'background: white; border-radius: 12px; padding: 20px; max-width: 600px; width: 90%; max-height: 80vh; overflow-y: auto; text-align: center; box-shadow: 0 10px 25px rgba(0,0,0,0.3);';
 
-        // Title / Prompt Text
         const title = document.createElement('h3');
         title.style.cssText = 'margin-bottom: 16px; color: #1e293b; font-size: 1.1rem;';
         title.innerText = pendingChoice.prompt || "Select a card:";
         modal.appendChild(title);
 
-        // Container for card options
         const cardsGrid = document.createElement('div');
         cardsGrid.style.cssText = 'display: flex; flex-wrap: wrap; gap: 12px; justify-content: center; margin-bottom: 20px;';
 
         const options = pendingChoice.options || [];
         options.forEach(card => {
-            const cardItem = document.createElement('div');
-            cardItem.style.cssText = 'width: 80px; cursor: pointer; transition: transform 0.2s; border: 2px solid #cbd5e1; border-radius: 8px; padding: 4px; background: #fff;';
-            cardItem.onmouseenter = () => cardItem.style.transform = 'scale(1.08)';
-            cardItem.onmouseleave = () => cardItem.style.transform = 'scale(1)';
+            let cardObj = (typeof card === 'object' && card !== null) ? card : { id: card, name: card };
 
-            const fileName = card ? (card.file || card.fileName || '') : '';
-            const category = card ? card.category : '';
-            const imagePath = getCardImagePath(category, fileName);
+            // 1. If options sent raw string IDs, attempt hydration from global card catalogs
+            if (typeof card === 'string' && typeof window.ALL_CARDS !== 'undefined') {
+                const found = window.ALL_CARDS.find(c => c && (c.id === card || c.name === card));
+                if (found) cardObj = found;
+            }
+
+            const cardId = cardObj.id || (typeof card === 'string' ? card : 'unknown');
+            const cardName = cardObj.name || cardId || 'Card';
+
+            // 2. Comprehensive Property Fallbacks
+            const fileName = cardObj.file || cardObj.fileName || cardObj.image || '';
+            const category = cardObj.category || cardObj.type || '';
+
+            const imagePath = typeof getCardImagePath === 'function'
+                ? getCardImagePath(category, fileName)
+                : `/image/${fileName}`;
+
+            const cardItem = document.createElement('div');
+            cardItem.style.cssText = 'width: 80px; cursor: pointer; transition: transform 0.2s; border: 2px solid #cbd5e1; border-radius: 8px; padding: 4px; background: #fff; position: relative;';
+
+            // 3. Attach Card Tooltips
+            cardItem.onmouseenter = (e) => {
+                cardItem.style.transform = 'scale(1.08)';
+                if (typeof showCardTooltip === 'function') showCardTooltip(e, cardObj);
+            };
+            cardItem.onmousemove = (e) => {
+                if (typeof moveCardTooltip === 'function') moveCardTooltip(e);
+            };
+            cardItem.onmouseleave = () => {
+                cardItem.style.transform = 'scale(1)';
+                if (typeof hideCardTooltip === 'function') hideCardTooltip();
+            };
 
             cardItem.innerHTML = `
-                <img src="${imagePath}" alt="${card.name || 'Card'}" style="width: 100%; height: 110px; object-fit: cover; border-radius: 6px; pointer-events: none;" onerror="this.onerror=null; this.src='https://via.placeholder.com/80x110?text=Card';" />
-                <p style="font-size: 0.7rem; margin-top: 4px; color: #1e293b; font-weight: bold; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${card.name || 'Card'}</p>
+                <img src="${imagePath}" alt="${cardName}" style="width: 100%; height: 110px; object-fit: cover; border-radius: 6px; pointer-events: none;" onerror="this.onerror=null; this.src='https://placehold.co/80x110?text=Card';" />
+                <p style="font-size: 0.7rem; margin-top: 4px; color: #1e293b; font-weight: bold; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${cardName}</p>
             `;
 
-            // Send choice back via WebSocket
             cardItem.onclick = () => {
+                if (typeof hideCardTooltip === 'function') hideCardTooltip();
                 if (typeof socket !== 'undefined' && socket) {
                     socket.send(JSON.stringify({
                         type: 'resolve_choice',
-                        targetCardId: card.id
+                        choice: cardId,
+                        targetCardId: cardId,
+                        cardId: cardId
                     }));
                 }
                 overlay.remove();
@@ -610,16 +665,18 @@ function renderSearchModal(gameState, myPlayerName, socket) {
 
         modal.appendChild(cardsGrid);
 
-        // Optional "Skip / Pass" Button
         if (pendingChoice.optional) {
             const skipButton = document.createElement('button');
             skipButton.style.cssText = 'padding: 8px 16px; background: #ef4444; color: white; border: none; border-radius: 6px; font-weight: bold; cursor: pointer;';
             skipButton.innerText = 'Skip (Do Not Choose)';
             skipButton.onclick = () => {
+                if (typeof hideCardTooltip === 'function') hideCardTooltip();
                 if (typeof socket !== 'undefined' && socket) {
                     socket.send(JSON.stringify({
                         type: 'resolve_choice',
-                        skipped: true
+                        action: 'SKIP',
+                        skipped: true,
+                        choice: null
                     }));
                 }
                 overlay.remove();
@@ -630,4 +687,65 @@ function renderSearchModal(gameState, myPlayerName, socket) {
         overlay.appendChild(modal);
         document.body.appendChild(overlay);
     }
+}
+
+function showGameReminder(message, icon = '✨') {
+    const existing = document.getElementById('game-reminder-toast');
+    if (existing) existing.remove();
+
+    // Rephrase harsh backend "Error:" prefixes into friendly language
+    let cleanMsg = message.replace(/^Error:\s*/i, '');
+    let displayIcon = icon;
+
+    if (cleanMsg.includes('Queen Bee')) {
+        displayIcon = '🐝';
+    } else if (cleanMsg.includes('Neigh') || cleanMsg.includes('Instant')) {
+        displayIcon = '🛑';
+    }
+
+    const toast = document.createElement('div');
+    toast.id = 'game-reminder-toast';
+    toast.style.cssText = `
+        position: fixed;
+        top: 24px;
+        left: 50%;
+        transform: translateX(-50%) translateY(-20px);
+        background: #ffffff;
+        border: 2px solid #fcd34d;
+        border-left: 6px solid #f59e0b;
+        box-shadow: 0 12px 28px -4px rgba(245, 158, 11, 0.25), 0 6px 12px -4px rgba(0, 0, 0, 0.08);
+        border-radius: 12px;
+        padding: 12px 20px;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        z-index: 20000;
+        color: #78350f;
+        font-size: 0.9rem;
+        font-weight: 600;
+        opacity: 0;
+        transition: transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1), opacity 0.3s ease;
+        pointer-events: none;
+    `;
+
+    toast.innerHTML = `
+        <span style="font-size: 1.6rem; line-height: 1;">${displayIcon}</span>
+        <div>
+            <div style="font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.05em; color: #d97706; font-weight: 800; margin-bottom: 2px;">Rule Reminder</div>
+            <div>${cleanMsg}</div>
+        </div>
+    `;
+
+    document.body.appendChild(toast);
+
+    requestAnimationFrame(() => {
+        toast.style.opacity = '1';
+        toast.style.transform = 'translateX(-50%) translateY(0)';
+    });
+
+    setTimeout(() => {
+        toast.style.opacity = '0';
+        toast.style.transform = 'translateX(-50%) translateY(-20px)';
+        setTimeout(() => toast.remove(), 300);
+    }, 4000);
 }

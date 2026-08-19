@@ -1,5 +1,5 @@
 // gameActions.js
-import { CARD_TYPES, shuffle, isUnicornCard, isBabyCard, isBasicUnicorn } from './cardsData.js';
+import { isUnicorn, CARD_TYPES, shuffle, isUnicornCard, isBabyCard, isBasicUnicorn } from './cardsData.js';
 import { triggerLeavesStable, triggerEntersStable, Neigh, SuperNeigh, RainbowAura, BlindingLight, BrokenStable, NannyCam, SadisticRitual, Slowdown, TinyStable, GinormousUnicorn, ReTarget, QueenBeeUnicorn, executeOnPlayEffect } from './cardEffects.js';
 import { checkWinCondition } from './gameEngine.js';
 /**
@@ -68,8 +68,18 @@ export function destroyCard(gameState, targetPlayerName, cardIdentifier, context
         return { requiresChoice: true, pendingChoice: gameState.pendingChoice };
     }
 
-    // Move to destination
-    const destination = cardToDestroy.returnToHandOnDestroy ? 'hand' : 'discard';
+    // Determine if card is a Baby Unicorn
+    const isBaby = (
+        cardToDestroy.category === 'BABY' ||
+        cardToDestroy.category === (typeof CARD_TYPES !== 'undefined' ? CARD_TYPES.BABY : 'BABY') ||
+        cardToDestroy.type === 'Baby' ||
+        cardToDestroy.category === 'Baby Unicorn' ||
+        cardToDestroy.isBaby === true
+    );
+
+    // Move to destination: Baby Unicorns ALWAYS go to the Nursery
+    let destination = cardToDestroy.returnToHandOnDestroy ? 'hand' : 'discard';
+    if (isBaby) destination = 'nursery';
 
     if (typeof sendCardFromStable === 'function') {
         return sendCardFromStable(gameState, targetPlayerName, cardToDestroy, destination);
@@ -107,7 +117,18 @@ export function sacrificeCard(gameState, playerName, cardIdentifier) {
         return { success: false, reason: "Target card not found in player's Stable, Upgrades, or Downgrades." };
     }
 
-    const destination = targetCard.returnToHandOnDestroy ? 'hand' : 'discard';
+    // Determine if card is a Baby Unicorn
+    const isBaby = (
+        targetCard.category === 'BABY' ||
+        targetCard.category === (typeof CARD_TYPES !== 'undefined' ? CARD_TYPES.BABY : 'BABY') ||
+        targetCard.type === 'Baby' ||
+        targetCard.category === 'Baby Unicorn' ||
+        targetCard.isBaby === true
+    );
+
+    // Move to destination: Baby Unicorns ALWAYS go to the Nursery
+    let destination = targetCard.returnToHandOnDestroy ? 'hand' : 'discard';
+    if (isBaby) destination = 'nursery';
 
     if (typeof sendCardFromStable === 'function') {
         return sendCardFromStable(gameState, playerName, targetCard, destination);
@@ -152,17 +173,16 @@ export function drawCard(gameState, playerName, count = 1) {
     if (!gameState.drawPile) gameState.drawPile = [];
 
     for (let i = 0; i < count; i++) {
-        // 1. If drawPile is empty, attempt an auto-reshuffle from discardPile
         if (gameState.drawPile.length === 0) {
-            shuffleDiscardIntoDrawPile(gameState);
+            if (typeof shuffleDiscardIntoDrawPile === 'function') {
+                shuffleDiscardIntoDrawPile(gameState);
+            }
         }
 
-        // 2. If it's STILL empty after trying to reshuffle, stop drawing
         if (gameState.drawPile.length === 0) {
             return { success: false, reason: "No cards left in the deck or discard pile!" };
         }
 
-        // 3. Draw top card from draw pile and add to hand
         const card = gameState.drawPile.pop();
         if (card) {
             player.hand.push(card);
@@ -170,6 +190,30 @@ export function drawCard(gameState, playerName, count = 1) {
     }
 
     return { success: true };
+}
+
+// 🎯 Call this function when the player clicks "Draw Card" on their turn during the Action phase
+export function executeDrawAction(gameState, playerName) {
+    const currentActions = gameState.actionsLeft !== undefined ? gameState.actionsLeft : (gameState.actionsRemaining ?? 1);
+
+    if (currentActions <= 0) {
+        return { success: false, reason: "You have no actions left this turn!" };
+    }
+
+    const drawResult = drawCard(gameState, playerName, 1);
+    if (!drawResult.success) {
+        return drawResult;
+    }
+
+    gameState.actionsLeft = Math.max(0, currentActions - 1);
+    gameState.actionsRemaining = gameState.actionsLeft;
+
+    // Advance turn automatically if no actions remain
+    if (gameState.actionsLeft <= 0 && typeof advanceToNextPlayer === 'function') {
+        return advanceToNextPlayer(gameState);
+    }
+
+    return { success: true, message: `${playerName} drew a card.` };
 }
 
 /**
@@ -187,14 +231,16 @@ export function stealCard(
     const fromPlayer = gameState.players ? gameState.players[fromPlayerName] : null;
     const toPlayer = gameState.players ? gameState.players[toPlayerName] : null;
 
+    // Validate both players and their stables upfront
     if (!fromPlayer || !toPlayer || !Array.isArray(fromPlayer.stable)) {
         return { success: false, reason: "Invalid player data for steal action." };
     }
+    toPlayer.stable = Array.isArray(toPlayer.stable) ? toPlayer.stable : [];
 
-    // Preserve original phase context before setting phase to CHOICE
+    // Preserve original phase context
     const originPhase = gameState.previousPhase || (gameState.phase !== 'CHOICE' ? gameState.phase : 'ACTION');
 
-    // 1. Resolve card index with strict fallback matching
+    // 1. Resolve card index
     let cardIndex = -1;
     if (typeof cardTarget === 'number') {
         cardIndex = cardTarget;
@@ -213,7 +259,7 @@ export function stealCard(
     // 2. Remove card from origin Stable
     const [stolenCard] = fromPlayer.stable.splice(cardIndex, 1);
 
-    // 3. Trigger Leaves-Stable Effect on origin player
+    // 3. Trigger Leaves-Stable Effect
     let leavesResult = null;
     const leavesFn = typeof triggerLeaves === 'function' ? triggerLeaves : triggerLeavesStable;
     if (typeof leavesFn === 'function') {
@@ -221,10 +267,9 @@ export function stealCard(
     }
 
     // 4. Transfer card to destination Stable
-    toPlayer.stable = toPlayer.stable || [];
     toPlayer.stable.push(stolenCard);
 
-    // 5. Trigger Enters-Stable (ETB) Effect on target player
+    // 5. Trigger Enters-Stable (ETB) Effect
     let etbResult = null;
     const etbFn = typeof triggerETB === 'function' ? triggerETB : triggerEntersStable;
     if (typeof etbFn === 'function') {
@@ -237,33 +282,26 @@ export function stealCard(
         tinyStableResult = checkTinyStableTrigger(gameState, toPlayerName);
     }
 
-    // --- RESOLVE QUEUE COLLISIONS ---
-    const pendingChoices = [];
+    // 7. Resolve Queue Collisions (Leaves -> ETB -> Tiny Stable)
+    const rawResults = [
+        { res: leavesResult, player: fromPlayerName },
+        { res: etbResult, player: toPlayerName },
+        { res: tinyStableResult, player: toPlayerName }
+    ];
 
-    if (etbResult && etbResult.requiresChoice) {
-        pendingChoices.push({
-            ...etbResult.pendingChoice,
+    const pendingChoices = rawResults
+        .filter(({ res }) => res && res.requiresChoice)
+        .map(({ res, player }) => ({
+            ...res.pendingChoice,
             isEnterTrigger: true,
             cardPlayed: stolenCard,
-            originalPlayer: toPlayerName,
-            previousPhase: etbResult.pendingChoice.previousPhase || originPhase
-        });
-    }
-
-    if (tinyStableResult && tinyStableResult.requiresChoice) {
-        pendingChoices.push({
-            ...tinyStableResult.pendingChoice,
-            isEnterTrigger: true,
-            cardPlayed: stolenCard,
-            originalPlayer: toPlayerName,
-            previousPhase: tinyStableResult.pendingChoice.previousPhase || originPhase
-        });
-    }
+            originalPlayer: player,
+            previousPhase: res.pendingChoice?.previousPhase || originPhase
+        }));
 
     if (pendingChoices.length > 0) {
         gameState.triggerQueue = gameState.triggerQueue || [];
 
-        // Enqueue remaining choices
         if (pendingChoices.length > 1) {
             gameState.triggerQueue.push(...pendingChoices.slice(1));
         }
@@ -458,7 +496,8 @@ export function returnCardToHand(gameState, targetPlayerName, cardId) {
         card.category === 'BABY' ||
         card.category === (typeof CARD_TYPES !== 'undefined' ? CARD_TYPES.BABY : 'BABY') ||
         card.type === 'Baby' ||
-        card.category === 'Baby Unicorn'
+        card.category === 'Baby Unicorn' ||
+        card.isBaby === true
     );
 
     const destination = isBaby ? 'nursery' : 'hand';
@@ -875,6 +914,8 @@ export function getUnicornCount(gameState, playerName) {
 /**
  * PLAY CARD FROM HAND: Plays a card from a player's hand into play or resolves its Magic effect.
  */
+import * as CardEffects from './cardEffects.js'; // Adjust path if needed
+
 export function playCardFromHand(gameState, playerName, handIndex, targetData = {}) {
     const player = gameState.players ? gameState.players[playerName] : null;
     if (!player || !player.hand || handIndex < 0 || handIndex >= player.hand.length) {
@@ -887,6 +928,44 @@ export function playCardFromHand(gameState, playerName, handIndex, targetData = 
     const isInstantCard = category.includes('INSTANT');
     const isMagicCard = category.includes('MAGIC') && !category.includes('UNICORN') && !category.includes('MAGICAL');
     const isDowngradeCard = category.includes('DOWNGRADE');
+    const isUpgradeCard = category.includes('UPGRADE');
+
+    // 🛡️ PIPELINE STEP 1: VERIFY ACTION RESOURCE
+    // Detect choice resolution via explicit flags OR presence of target fields
+    const isResumingChoice = Boolean(
+        targetData.isChoiceResolved ||
+        targetData.neighResolved ||
+        targetData.actionDeducted ||
+        targetData.targetPlayerName ||
+        targetData.targetPlayer ||
+        targetData.selectedPlayer ||
+        (gameState.pendingChoice && gameState.pendingChoice.cardPlayed)
+    );
+
+    const currentActions = gameState.actionsLeft !== undefined ? gameState.actionsLeft : (gameState.actionsRemaining ?? 1);
+
+    if (!isInstantCard && !isResumingChoice && currentActions <= 0) {
+        return { success: false, reason: "You have no actions left this turn!" };
+    }
+
+    // Helper to ensure action cost is charged exactly once per card play execution
+    const deductActionOnce = () => {
+        if (!targetData.actionDeducted && !isInstantCard && currentActions > 0) {
+            gameState.actionsLeft = Math.max(0, currentActions - 1);
+            gameState.actionsRemaining = gameState.actionsLeft;
+            targetData.actionDeducted = true;
+        }
+    };
+
+    // 🛡️ PIPELINE STEP 2: CHECK PASSIVE RESTRICTIONS
+    if (isUpgradeCard) {
+        const hasBrokenStable = (player.downgrades || []).some(c => c && c.name === 'Broken Stable') ||
+            (player.stable || []).some(c => c && c.name === 'Broken Stable');
+
+        if (hasBrokenStable) {
+            return { success: false, reason: "Broken Stable is active in your Stable! You cannot play Upgrade cards." };
+        }
+    }
 
     // --- 0. INSTANT CARD HANDLING ---
     if (isInstantCard) {
@@ -894,7 +973,6 @@ export function playCardFromHand(gameState, playerName, handIndex, targetData = 
             return { success: false, reason: "Slowdown is active in your Stable! You cannot play Instant cards." };
         }
 
-        // Instant cards cannot enter stable directly
         if (card.onPlay?.action === 'SUPER_NEIGH' || card.id === 'super_neigh') {
             return playSuperNeighCard(gameState, playerName, handIndex, targetData.targetedCard, targetData.targetPlayerName);
         }
@@ -902,7 +980,6 @@ export function playCardFromHand(gameState, playerName, handIndex, targetData = 
     }
 
     // --- 1. NEIGH INTERRUPT WINDOW CHECK ---
-    // If card hasn't passed the Neigh window yet, initiate NEIGH_INTERRUPT prompt loop
     const playerHasYay = typeof Yay === 'function' && Yay(gameState, playerName);
     if (!targetData.neighResolved && !playerHasYay) {
         const playersWithNeigh = (gameState.playerOrder || []).filter(pName => {
@@ -917,6 +994,7 @@ export function playCardFromHand(gameState, playerName, handIndex, targetData = 
         });
 
         if (playersWithNeigh.length > 0) {
+            deductActionOnce();
             gameState.pendingChoice = {
                 actionType: 'NEIGH_INTERRUPT',
                 choosers: playersWithNeigh,
@@ -928,7 +1006,7 @@ export function playCardFromHand(gameState, playerName, handIndex, targetData = 
                 lastNeighPlayer: null,
                 neighCount: 0,
                 previousPhase: gameState.phase || 'ACTION',
-                contextData: targetData
+                contextData: { ...targetData, actionDeducted: true }
             };
             gameState.phase = 'CHOICE';
             return { success: true, requiresChoice: true, pendingChoice: gameState.pendingChoice };
@@ -937,6 +1015,7 @@ export function playCardFromHand(gameState, playerName, handIndex, targetData = 
 
     // --- 2. MAGIC CARDS ---
     if (isMagicCard) {
+        deductActionOnce();
         const effectResult = executeOnPlayEffect(gameState, playerName, card, { ...targetData, cardPlayed: card });
 
         if (effectResult && effectResult.requiresChoice) {
@@ -944,7 +1023,8 @@ export function playCardFromHand(gameState, playerName, handIndex, targetData = 
                 ...effectResult.pendingChoice,
                 cardPlayed: card,
                 cardIndex: handIndex,
-                originalPlayer: playerName
+                originalPlayer: playerName,
+                contextData: { ...(effectResult.pendingChoice.contextData || {}), actionDeducted: true }
             };
             gameState.phase = 'CHOICE';
             return { success: true, requiresChoice: true, pendingChoice: gameState.pendingChoice };
@@ -955,6 +1035,11 @@ export function playCardFromHand(gameState, playerName, handIndex, targetData = 
                 player.hand.splice(handIndex, 1);
                 gameState.discardPile = gameState.discardPile || [];
                 gameState.discardPile.push(card);
+            }
+
+            // Auto-advance turn if no actions remain
+            if (gameState.actionsLeft <= 0 && typeof advanceToNextPlayer === 'function') {
+                advanceToNextPlayer(gameState);
             }
 
             return {
@@ -968,36 +1053,73 @@ export function playCardFromHand(gameState, playerName, handIndex, targetData = 
         return effectResult || { success: false, reason: "Failed to execute Magic card effect." };
     }
 
-    // --- 3. DOWNGRADE CARDS ---
-    if (isDowngradeCard) {
-        let targetPlayer = targetData.targetPlayerName || targetData.targetPlayer || targetData.selectedPlayer;
+    // --- 3. RESOLVE TARGET DESTINATION PLAYER ---
+    let destinationPlayer = playerName;
+    const functionName = (card.name || '').replace(/[^a-zA-Z0-9]/g, '');
+    const effectFn = (typeof CardEffects !== 'undefined' && CardEffects[functionName]) ||
+        (typeof window !== 'undefined' && window[functionName]) ||
+        (typeof globalThis !== 'undefined' && globalThis[functionName]);
 
-        if (!targetPlayer) {
-            const possibleTargets = (gameState.playerOrder || []).filter(name => name !== playerName);
+    if (isDowngradeCard || isUpgradeCard) {
+        destinationPlayer = targetData.targetPlayerName || targetData.targetPlayer || targetData.selectedPlayer;
+
+        if (!destinationPlayer) {
+            let possibleTargets = isDowngradeCard
+                ? (gameState.playerOrder || []).filter(name => name !== playerName)
+                : (gameState.playerOrder || []);
+
+            if (typeof effectFn === 'function') {
+                possibleTargets = possibleTargets.filter(pName => {
+                    const check = effectFn(gameState, pName, { ...targetData, isPlayConditionCheck: true, targetPlayerName: pName });
+                    return !(check && check.canEnter === false);
+                });
+            }
+
+            if (possibleTargets.length === 0) {
+                return { success: false, reason: `No valid targets available for ${card.name}.` };
+            }
+
+            deductActionOnce();
             gameState.pendingChoice = {
                 chooser: playerName,
-                actionType: 'TARGET_PLAYER_DOWNGRADE',
-                targetScope: 'OTHER_PLAYER',
-                prompt: `Choose a player to receive the Downgrade card: ${card.name}`,
+                actionType: isDowngradeCard ? 'TARGET_PLAYER_DOWNGRADE' : 'TARGET_PLAYER_UPGRADE',
+                targetScope: isDowngradeCard ? 'OTHER_PLAYER' : 'ANY_PLAYER',
+                prompt: `Choose a player to receive ${card.name}`,
                 cardIndex: handIndex,
                 cardPlayed: card,
                 originalPlayer: playerName,
-                allowedPlayers: possibleTargets.length > 0 ? possibleTargets : (gameState.playerOrder || [playerName])
+                allowedPlayers: possibleTargets,
+                contextData: { ...(targetData || {}), actionDeducted: true, isChoiceResolved: false }
             };
             gameState.phase = 'CHOICE';
-
             return { success: true, requiresChoice: true, pendingChoice: gameState.pendingChoice };
         }
-
-        return bringDirectlyIntoPlay(gameState, targetPlayer, card, 'hand', playerName, triggerEntersStable);
     }
 
-    // --- 4. STANDARD PERMANENTS (Unicorns / Upgrades) ---
-    const result = bringDirectlyIntoPlay(gameState, playerName, card, 'hand', playerName, triggerEntersStable);
+    // --- 4. SAFE ENTRY CONDITION CHECK ---
+    if (typeof effectFn === 'function') {
+        const conditionCheck = effectFn(gameState, destinationPlayer, {
+            ...targetData,
+            isPlayConditionCheck: true,
+            targetPlayerName: destinationPlayer
+        });
+
+        if (conditionCheck && conditionCheck.canEnter === false) {
+            return { success: false, reason: conditionCheck.reason || `${card.name} play requirements not met.` };
+        }
+    }
+
+    // --- 5. ENTER PLAY & DEDUCT ACTION ---
+    deductActionOnce();
+    const result = bringDirectlyIntoPlay(gameState, destinationPlayer, card, 'hand', playerName, triggerEntersStable);
 
     if (result && result.requiresChoice) {
         gameState.pendingChoice = result.pendingChoice;
         gameState.phase = 'CHOICE';
+    } else if (result && result.success) {
+        if (gameState.actionsLeft <= 0 && typeof advanceToNextPlayer === 'function') {
+            advanceToNextPlayer(gameState);
+        }
     }
 
     return result;
